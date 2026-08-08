@@ -114,6 +114,11 @@ export default function Chat() {
   const isLoading = status === "submitted" || status === "streaming";
   messageCountRef.current = messages.length;
   const toolEvents = useMemo(() => projectToolEventsRef.current(messages), [messages]);
+  // The transcript needs the same events the panel shows, looked up per call.
+  const toolEventsById = useMemo(
+    () => new Map(toolEvents.map((event) => [event.id, event])),
+    [toolEvents],
+  );
   const agentEvents = useMemo(
     () => mergeAgentEvents(lifecycleEvents, toolEvents),
     [lifecycleEvents, toolEvents],
@@ -316,6 +321,7 @@ export default function Chat() {
                   isLoading={isLoading}
                   status={status}
                   isLatestMessage={i === messages.length - 1}
+                  toolEvents={toolEventsById}
                 />
               ))}
               <div ref={desktopEndRef} className="pb-2" />
@@ -366,6 +372,7 @@ export default function Chat() {
               isLoading={isLoading}
               status={status}
               isLatestMessage={i === messages.length - 1}
+                  toolEvents={toolEventsById}
             />
           ))}
           <div ref={mobileEndRef} className="pb-2" />

@@ -1,35 +1,13 @@
 "use client";
 
-import { isLifecycleFailure, type AgentEvent, type ToolEvent } from "@/lib/agent-events";
+import { isLifecycleFailure, type AgentEvent } from "@/lib/agent-events";
+import { describeToolEvent, formatDuration } from "@/lib/tool-event-display";
 import { cn } from "@/lib/utils";
 import { Activity, CheckCircle2, CircleAlert, Clock3, MonitorUp } from "lucide-react";
 
 type AgentEventPanelProps = {
   events: AgentEvent[];
   sandboxId: string | null;
-};
-
-const truncate = (value: string, max = 120) =>
-  value.length > max ? `${value.slice(0, max)}…` : value;
-
-const describeToolEvent = (event: ToolEvent) => {
-  switch (event.tool) {
-    case "computer": {
-      const detail = event.coordinate
-        ? ` (${event.coordinate.join(", ")})`
-        : event.text
-          ? ` ${event.text}`
-          : "";
-      return { label: "computer", detail: truncate(`${event.action}${detail}`) };
-    }
-    case "bash":
-      return { label: "bash", detail: truncate(event.command) || "No command" };
-    default:
-      return {
-        label: event.toolName,
-        detail: event.payload ? truncate(JSON.stringify(event.payload)) : "No payload",
-      };
-  }
 };
 
 const getStatusIcon = (event: AgentEvent) => {
@@ -41,12 +19,6 @@ const getStatusIcon = (event: AgentEvent) => {
 
 const isFailure = (event: AgentEvent) =>
   event.kind === "lifecycle" ? isLifecycleFailure(event) : event.status === "error";
-
-const formatDuration = (durationMs?: number) => {
-  if (durationMs === undefined) return null;
-  if (durationMs < 1000) return `${durationMs}ms`;
-  return `${(durationMs / 1000).toFixed(1)}s`;
-};
 
 export function AgentEventPanel({ events, sandboxId }: AgentEventPanelProps) {
   const toolEvents = events.filter((event) => event.kind === "tool");

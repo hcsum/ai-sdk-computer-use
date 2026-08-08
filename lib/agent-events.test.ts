@@ -4,6 +4,7 @@ import type { Message } from "ai";
 import {
   createToolEventProjector,
   deriveToolEvents,
+  getScreenshotBase64,
   lifecycleOrderFor,
   mergeAgentEvents,
   type LifecycleEvent,
@@ -138,6 +139,23 @@ describe("deriveToolEvents", () => {
     expect(events[0]).toMatchObject({ tool: "computer", hasScreenshot: true });
     expect(JSON.stringify(events[0])).not.toContain("iVBORw0KGgo=");
   });
+});
+
+describe("getScreenshotBase64", () => {
+  it("reads the payload the event deliberately left behind", () => {
+    expect(
+      getScreenshotBase64({ ok: true, data: { type: "image", data: "iVBORw0KGgo=" } }),
+    ).toBe("iVBORw0KGgo=");
+  });
+
+  it("returns nothing for a text result, a failure, or a call still in flight", () => {
+    expect(getScreenshotBase64({ ok: true, data: { type: "text", text: "hi" } })).toBeUndefined();
+    expect(getScreenshotBase64({ ok: false, error: "boom" })).toBeUndefined();
+    expect(getScreenshotBase64(undefined)).toBeUndefined();
+  });
+});
+
+describe("deriveToolEvents, continued", () => {
 
   it("treats a user abort as an error rather than a completed call", () => {
     const events = deriveToolEvents([

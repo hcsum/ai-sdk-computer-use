@@ -116,6 +116,16 @@ const getResultData = (result: unknown) => {
   return candidate;
 };
 
+/**
+ * The bytes behind `hasScreenshot`. Events stay light on purpose, so whatever
+ * renders the image reads it back out of `messages` through here — this is the
+ * only sanctioned way across that boundary.
+ */
+export const getScreenshotBase64 = (result: unknown): string | undefined => {
+  const data = asRecord(getResultData(result)?.data);
+  return data.type === "image" ? asString(data.data) : undefined;
+};
+
 const projectComputer = (args: unknown, result: unknown) => {
   const input = asRecord(args);
   const data = asRecord(getResultData(result)?.data);
