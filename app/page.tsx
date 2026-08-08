@@ -22,6 +22,7 @@ import { ABORTED } from "@/lib/utils";
 import {
   agentEventKey,
   createToolEventProjector,
+  createTurnEventProjector,
   findToolPayload,
   lifecycleOrderFor,
   mergeAgentEvents,
@@ -47,6 +48,7 @@ export default function Chat() {
   // otherwise close over a stale `messages`.
   const messageCountRef = useRef(0);
   const projectToolEventsRef = useRef(createToolEventProjector());
+  const projectTurnEventsRef = useRef(createTurnEventProjector());
 
   const {
     messages,
@@ -123,9 +125,10 @@ export default function Chat() {
     () => new Map(toolEvents.map((event) => [event.id, event])),
     [toolEvents],
   );
+  const turnEvents = useMemo(() => projectTurnEventsRef.current(messages), [messages]);
   const agentEvents = useMemo(
-    () => mergeAgentEvents(lifecycleEvents, toolEvents),
-    [lifecycleEvents, toolEvents],
+    () => mergeAgentEvents(lifecycleEvents, [...toolEvents, ...turnEvents]),
+    [lifecycleEvents, toolEvents, turnEvents],
   );
 
   const selectedEvent = useMemo(
@@ -141,6 +144,29 @@ export default function Chat() {
         : undefined,
     [messages, selectedEvent],
   );
+
+  /**
+   * Selecting from the debug panel also reveals the call in the transcript, so
+   * the flat log and the conversation stay two views of one thing rather than
+   * two places to look. Lifecycle events own no message and simply do not move
+   * the transcript.
+   *
+   * Both layouts are mounted at once behind breakpoint classes, so the hidden
+   * one is skipped by `offsetParent` rather than scrolled invisibly.
+   */
+  const selectAndRevealEvent = useCallback((eventId: string | null) => {
+    setSelectedEventId(eventId);
+    if (!eventId) return;
+
+    requestAnimationFrame(() => {
+      document
+        .querySelectorAll<HTMLElement>(`[data-event-id="${CSS.escape(eventId)}"]`)
+        .forEach((card) => {
+          if (card.offsetParent === null) return;
+          card.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+    });
+  }, []);
 
   // Stable identity: `DesktopPanel` is memoised, and a handler rebuilt on every
   // streamed token would defeat that outright.
@@ -284,42 +310,11 @@ export default function Chat() {
       {/* Resizable Panels */}
       <div className="w-full hidden xl:block">
         <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Desktop stream, with the inspector docked beneath it */}
-          <ResizablePanel defaultSize={70} minSize={40}>
-            <ResizablePanelGroup direction="vertical" className="h-full">
-              <ResizablePanel
-                defaultSize={70}
-                minSize={30}
-                className="bg-black relative items-center justify-center"
-              >
-                <DesktopPanel
-                  streamUrl={streamUrl}
-                  isInitializing={isInitializing}
-                  onRefresh={refreshDesktop}
-                />
-              </ResizablePanel>
-
-              <ResizableHandle withHandle />
-
-              <ResizablePanel
-                defaultSize={30}
-                minSize={15}
-                collapsible
-                collapsedSize={0}
-                className="border-t border-zinc-200"
-              >
-                <EventInspector event={selectedEvent} payload={selectedPayload} />
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          </ResizablePanel>
-
-          <ResizableHandle withHandle />
-
-          {/* Chat Interface Panel */}
+          {/* Chat: the transcript, the composer and the debug panel */}
           <ResizablePanel
-            defaultSize={30}
+            defaultSize={38}
             minSize={25}
-            className="flex flex-col border-l border-zinc-200"
+            className="flex flex-col border-r border-zinc-200"
           >
             <div className="bg-white py-4 px-4 flex justify-between items-center">
               <AISDKLogo />
@@ -352,7 +347,7 @@ export default function Chat() {
               sessionId={sessionId}
               chatStatus={status}
               selectedEventId={selectedEventId}
-              onSelectEvent={setSelectedEventId}
+              onSelectEvent={selectAndRevealEvent}
             />
 
             {messages.length === 0 && (
@@ -375,6 +370,37 @@ export default function Chat() {
                 />
               </form>
             </div>
+          </ResizablePanel>
+
+          <ResizableHandle withHandle />
+
+          {/* Desktop stream, with the inspector docked beneath it */}
+          <ResizablePanel defaultSize={62} minSize={40}>
+            <ResizablePanelGroup direction="vertical" className="h-full">
+              <ResizablePanel
+                defaultSize={70}
+                minSize={30}
+                className="bg-black relative items-center justify-center"
+              >
+                <DesktopPanel
+                  streamUrl={streamUrl}
+                  isInitializing={isInitializing}
+                  onRefresh={refreshDesktop}
+                />
+              </ResizablePanel>
+
+              <ResizableHandle withHandle />
+
+              <ResizablePanel
+                defaultSize={30}
+                minSize={15}
+                collapsible
+                collapsedSize={0}
+                className="border-t border-zinc-200"
+              >
+                <EventInspector event={selectedEvent} payload={selectedPayload} />
+              </ResizablePanel>
+            </ResizablePanelGroup>
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
@@ -427,7 +453,7 @@ export default function Chat() {
           sessionId={sessionId}
           chatStatus={status}
           selectedEventId={selectedEventId}
-          onSelectEvent={setSelectedEventId}
+          onSelectEvent={selectAndRevealEvent}
         />
 
         {messages.length === 0 && (

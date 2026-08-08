@@ -123,6 +123,8 @@ const PurePreviewMessage = ({
                       initial={{ y: 5, opacity: 0 }}
                       animate={{ y: 0, opacity: 1 }}
                       key={`message-${message.id}-part-${i}`}
+                      // The anchor the debug panel scrolls to.
+                      data-event-id={eventKey}
                       role="button"
                       tabIndex={0}
                       aria-pressed={isSelected}
