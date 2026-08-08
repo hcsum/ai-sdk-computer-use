@@ -10,8 +10,12 @@ export type AgentStatus = "idle" | "thinking" | "acting" | "error";
 
 export type ChatStatus = "error" | "submitted" | "streaming" | "ready";
 
-export const isFailedEvent = (event: AgentEvent) =>
-  event.kind === "lifecycle" ? isLifecycleFailure(event) : event.status === "error";
+export const isFailedEvent = (event: AgentEvent) => {
+  if (event.kind === "lifecycle") return isLifecycleFailure(event);
+  // A turn is a marker, not an operation — it has no outcome to fail.
+  if (event.kind === "turn") return false;
+  return event.status === "error";
+};
 
 /**
  * `thinking` and `acting` are both "a turn is in flight", split by whether the
@@ -89,7 +93,7 @@ export const summarizeEvents = (events: AgentEvent[]): EventSummary => {
   return { toolCalls, pending, failed, totalDurationMs };
 };
 
-export const EVENT_FILTERS = ["all", "tools", "lifecycle", "errors"] as const;
+export const EVENT_FILTERS = ["all", "tools", "chat", "lifecycle", "errors"] as const;
 
 export type EventFilter = (typeof EVENT_FILTERS)[number];
 
@@ -97,6 +101,8 @@ export const filterEvents = (events: AgentEvent[], filter: EventFilter): AgentEv
   switch (filter) {
     case "tools":
       return events.filter((event) => event.kind === "tool");
+    case "chat":
+      return events.filter((event) => event.kind === "turn");
     case "lifecycle":
       return events.filter((event) => event.kind === "lifecycle");
     case "errors":

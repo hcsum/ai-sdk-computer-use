@@ -4,7 +4,9 @@ import type { Message } from "ai";
 import {
   agentEventKey,
   createToolEventProjector,
+  createTurnEventProjector,
   deriveToolEvents,
+  deriveTurnEvents,
   findToolPayload,
   getScreenshotBase64,
   lifecycleOrderFor,
@@ -302,6 +304,84 @@ describe("deriveToolEvents, continued", () => {
       ]),
     ];
     expect(project(resolved)[0].timestamp).toBe("2026-08-08T00:00:00.000Z");
+  });
+});
+
+describe("deriveTurnEvents", () => {
+  const message = (
+    role: "user" | "assistant",
+    parts: unknown[],
+    id: string,
+  ): Message => ({ id, role, content: "", parts }) as Message;
+
+  const textPart = (text: string) => ({ type: "text", text });
+
+  it("marks a user turn even though it carries no tool call", () => {
+    const events = deriveTurnEvents([message("user", [textPart("hi")], "message-1")]);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "turn", id: "message-1", role: "user" });
+  });
+
+  it("records no message content", () => {
+    const events = deriveTurnEvents([
+      message("user", [textPart("my bank password is hunter2")], "message-1"),
+    ]);
+
+    expect(JSON.stringify(events)).not.toContain("hunter2");
+  });
+
+  it("skips an assistant message that only made tool calls", () => {
+    const events = deriveTurnEvents([
+      message(
+        "assistant",
+        [toolPart({ toolCallId: "tool-1", toolName: "bash", state: "call", args: {} })],
+        "message-1",
+      ),
+    ]);
+
+    expect(events).toEqual([]);
+  });
+
+  it("marks an assistant message that also spoke", () => {
+    const events = deriveTurnEvents([
+      message(
+        "assistant",
+        [
+          toolPart({ toolCallId: "tool-1", toolName: "bash", state: "call", args: {} }),
+          textPart("Dubai is 38°C."),
+        ],
+        "message-1",
+      ),
+    ]);
+
+    expect(events).toMatchObject([{ role: "assistant", messageId: "message-1" }]);
+  });
+
+  it("opens a message's block, ahead of the tool calls it made", () => {
+    const messages = [
+      message(
+        "assistant",
+        [
+          textPart("Let me look."),
+          toolPart({ toolCallId: "tool-1", toolName: "bash", state: "call", args: {} }),
+        ],
+        "message-1",
+      ),
+    ];
+
+    expect(deriveTurnEvents(messages)[0].order).toBeLessThan(
+      deriveToolEvents(messages)[0].order,
+    );
+  });
+
+  it("keeps a message's timestamp stable across re-derivations", () => {
+    let tick = 0;
+    const project = createTurnEventProjector(() => `stamp-${tick++}`);
+    const messages = [message("user", [textPart("hi")], "message-1")];
+
+    expect(project(messages)[0].timestamp).toBe("stamp-0");
+    expect(project(messages)[0].timestamp).toBe("stamp-0");
   });
 });
 

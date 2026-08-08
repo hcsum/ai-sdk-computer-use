@@ -13,14 +13,20 @@ import {
   type ChatStatus,
   type EventFilter,
 } from "@/lib/agent-event-stats";
-import { describeToolEvent, formatDuration } from "@/lib/tool-event-display";
+import {
+  describeToolEvent,
+  describeTurnEvent,
+  formatDuration,
+} from "@/lib/tool-event-display";
 import { cn } from "@/lib/utils";
 import {
   Activity,
+  Bot,
   CheckCircle2,
   ChevronDown,
   CircleAlert,
   Clock3,
+  MessageSquare,
   MonitorUp,
 } from "lucide-react";
 
@@ -42,9 +48,21 @@ const STATUS_STYLES = {
 
 const getStatusIcon = (event: AgentEvent) => {
   if (event.kind === "lifecycle") return isLifecycleFailure(event) ? CircleAlert : MonitorUp;
+  if (event.kind === "turn") return event.role === "user" ? MessageSquare : Bot;
   if (event.status === "pending") return Clock3;
   if (event.status === "error") return CircleAlert;
   return CheckCircle2;
+};
+
+const describeEvent = (event: AgentEvent) => {
+  switch (event.kind) {
+    case "tool":
+      return describeToolEvent(event);
+    case "turn":
+      return describeTurnEvent(event);
+    default:
+      return { label: event.label, detail: event.type };
+  }
 };
 
 const Stat = ({ label, value }: { label: string; value: string }) => (
@@ -151,14 +169,16 @@ export function AgentEventPanel({
             ) : (
               visibleEvents.map((event) => {
                 const StatusIcon = getStatusIcon(event);
-                const { label, detail } =
-                  event.kind === "tool"
-                    ? describeToolEvent(event)
-                    : { label: event.label, detail: event.type };
+                const { label, detail } = describeEvent(event);
                 const duration =
                   event.kind === "tool" ? formatDuration(event.durationMs) : null;
                 // The cause line: a tool's error, or a failed lifecycle event's detail.
-                const cause = event.kind === "tool" ? event.error : event.detail;
+                const cause =
+                  event.kind === "tool"
+                    ? event.error
+                    : event.kind === "lifecycle"
+                      ? event.detail
+                      : undefined;
                 const eventKey = agentEventKey(event);
                 const isSelected = eventKey === selectedEventId;
 
@@ -182,6 +202,7 @@ export function AgentEventPanel({
                         event.kind === "lifecycle" &&
                           !isFailedEvent(event) &&
                           "bg-blue-50 text-blue-600",
+                        event.kind === "turn" && "bg-zinc-100 text-zinc-500",
                         event.kind === "tool" &&
                           event.status === "pending" &&
                           "bg-amber-50 text-amber-600",
@@ -201,7 +222,7 @@ export function AgentEventPanel({
                             isFailedEvent(event) && "text-red-500",
                           )}
                         >
-                          {event.kind === "tool" ? event.status : "lifecycle"}
+                          {event.kind === "tool" ? event.status : event.kind}
                         </span>
                       </div>
                       <div className="mt-1 truncate font-mono text-[11px] text-zinc-500">

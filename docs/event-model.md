@@ -9,7 +9,8 @@ was built, so it doubles as the spec for it.
 ```text
 Session    = messages + lifecycleEvents + sandboxId
 ToolEvents = derive(messages, keyed by toolCallId)
-AllEvents  = lifecycleEvents + ToolEvents
+TurnEvents = derive(messages, keyed by messageId)
+AllEvents  = lifecycleEvents + ToolEvents + TurnEvents
 ```
 
 **`messages`** is the conversation itself, straight from the AI SDK's `useChat`.
@@ -18,6 +19,12 @@ It restores context and is what gets submitted back to `/api/chat`.
 **`toolEvents`** is the agent's activity log, projected from the `tool-invocation`
 parts inside `messages`. It backs the debug panel, the inspector, the counters,
 the agent status indicator and the timeline.
+
+**`turnEvents`** marks where the conversation moved, so the timeline has no
+unexplained gaps: a run that pauses for thirty seconds between two clicks should
+show the answer that happened in between, not a hole. A user message always
+produces one; an assistant message produces one only if it actually spoke, since
+a message that merely made tool calls is already described by those.
 
 **`lifecycleEvents`** covers app/runtime facts the AI SDK never records:
 `session_created`, `sandbox_created`, `sandbox_reconnected`, `sandbox_killed`,
@@ -32,10 +39,15 @@ The dividing question: **does this data need to participate verbatim in the next
 LLM turn?** If yes it belongs in `messages`; if it only exists to be observed,
 debugged or counted, it is an event.
 
-Deliberately *not* done: folding user messages, assistant responses and tool calls
-into one flat event store. That works, but it welds the conversation protocol to
-the debug/telemetry surface — and then trimming screenshots, reshaping events or
-clearing debug data all become ways to break chat resume.
+**The line is content, not existence.** A `TurnEvent` records *that* a turn
+happened, whose it was, and where it sits in the order — never a word of what was
+said. `messages` therefore stays the sole owner of everything the next LLM turn
+replays, which is what makes the event store safe to clear, filter or reshape.
+
+Deliberately *not* done: folding message content into a flat event store, so that
+events become the thing chat resume reads back. That works right up until the
+first size-driven trim, and then trimming screenshots, reshaping events or
+clearing debug data all become ways to break resume.
 
 `session_switched` stays out of `Session.lifecycleEvents`. Every other lifecycle
 event is a fact *about one session*, but switching is a cross-session action:
@@ -45,10 +57,11 @@ actions belong in an app-level log, or nowhere.
 
 ## Event shape
 
-`AgentEvent` is a discriminated union of two families:
+`AgentEvent` is a discriminated union of three families:
 
 - **`ToolEvent`** — a tool call / VM action. Satisfies the requirement to capture
   every tool call with id, timestamp, type, payload, status and duration.
+- **`TurnEvent`** — a conversational turn. Carries a role and a position, no text.
 - **`LifecycleEvent`** — session and sandbox lifecycle.
 
 `computer` and `bash` are both tool calls but get distinct event types, because
@@ -85,6 +98,24 @@ changes, `useChat`'s `id` changes with it, and the AI SDK treats it as a differe
 conversation and drops the state. So `Session.sandboxId` is not identity; it is a
 mutable *current binding* that may be `null`, may be a dead id, and may be
 replaced on reconnect.
+
+## Ordering is observation order, not time
+
+Every event carries an `order`, and the timeline sorts on that rather than on
+`timestamp`. Tool timing is stamped by the server and lifecycle timing by the
+browser; those two clocks need not agree, so a timestamp sort can interleave them
+wrongly.
+
+Each message owns a block of 1000 slots:
+
+```text
+message n, slot 0        the turn marker
+message n, slot 1+p      the tool call at part index p
+lifecycle at n messages  n * 1000 - 1, just ahead of message n's block
+```
+
+Ties keep insertion order, since `Array.prototype.sort` is stable — that is what
+puts a lifecycle event before the message it precedes.
 
 ## Projection, not duplication
 

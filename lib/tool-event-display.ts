@@ -11,7 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import type { ToolEvent } from "./agent-events";
+import type { ToolEvent, TurnEvent } from "./agent-events";
 
 /**
  * The one place a `ToolEvent` turns into words and an icon. The chat transcript
@@ -119,6 +119,15 @@ export const describeToolEvent = (event: ToolEvent): { label: string; detail: st
       };
   }
 };
+
+/**
+ * A turn shows who spoke and nothing else — the words themselves live in the
+ * transcript, which is the only place that owns them.
+ */
+export const describeTurnEvent = (event: TurnEvent) =>
+  event.role === "user"
+    ? { label: "You", detail: "user_turn" }
+    : { label: "Agent", detail: "assistant_turn" };
 
 export const formatDuration = (durationMs?: number) => {
   if (durationMs === undefined) return null;

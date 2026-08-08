@@ -1,11 +1,12 @@
 "use client";
 
+import { getScreenshotBase64, type AgentEvent } from "@/lib/agent-events";
+import { isFailedEvent } from "@/lib/agent-event-stats";
 import {
-  getScreenshotBase64,
-  isLifecycleFailure,
-  type AgentEvent,
-} from "@/lib/agent-events";
-import { describeToolAction, formatDuration } from "@/lib/tool-event-display";
+  describeToolAction,
+  describeTurnEvent,
+  formatDuration,
+} from "@/lib/tool-event-display";
 import { cn } from "@/lib/utils";
 import { MousePointerSquareDashed } from "lucide-react";
 
@@ -61,11 +62,15 @@ export function EventInspector({ event, payload }: EventInspectorProps) {
     );
   }
 
-  const isFailure =
-    event.kind === "lifecycle" ? isLifecycleFailure(event) : event.status === "error";
+  const isFailure = isFailedEvent(event);
   const title =
-    event.kind === "tool" ? describeToolAction(event).title : event.label;
-  const status = event.kind === "tool" ? event.status : event.type;
+    event.kind === "tool"
+      ? describeToolAction(event).title
+      : event.kind === "turn"
+        ? describeTurnEvent(event).label
+        : event.label;
+  const status =
+    event.kind === "tool" ? event.status : event.kind === "turn" ? event.role : event.type;
   const screenshot =
     event.kind === "tool" ? getScreenshotBase64(payload?.result) : undefined;
 
@@ -88,6 +93,7 @@ export function EventInspector({ event, payload }: EventInspectorProps) {
       <div className="mb-3 divide-y divide-zinc-100 border-y border-zinc-100">
         <Row label={event.kind === "tool" ? "Tool call id" : "Event id"} value={event.id} />
         {event.kind === "tool" ? <Row label="Message" value={event.messageId} /> : null}
+        {event.kind === "turn" ? <Row label="Role" value={event.role} /> : null}
         {/* The sort key. It is the first thing to look at when the timeline
             comes out in an order that seems wrong. */}
         <Row label="Order" value={String(event.order)} />
@@ -106,15 +112,28 @@ export function EventInspector({ event, payload }: EventInspectorProps) {
         ) : (
           <>
             <Row label="Observed" value={formatTime(event.timestamp)!} />
-            {event.sandboxId ? <Row label="Sandbox" value={event.sandboxId} /> : null}
+            {event.kind === "lifecycle" && event.sandboxId ? (
+              <Row label="Sandbox" value={event.sandboxId} />
+            ) : null}
           </>
         )}
       </div>
 
       {isFailure ? (
         <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-2 text-[11px] text-red-700">
-          {(event.kind === "tool" ? event.error : event.detail) ?? "Failed without a reason."}
+          {(event.kind === "tool"
+            ? event.error
+            : event.kind === "lifecycle"
+              ? event.detail
+              : undefined) ?? "Failed without a reason."}
         </div>
+      ) : null}
+
+      {event.kind === "turn" ? (
+        <p className="text-[11px] leading-relaxed text-zinc-500">
+          A turn records that the conversation moved, not what was said. The message
+          itself lives in the transcript, which stays its only owner.
+        </p>
       ) : null}
 
       {screenshot ? (
