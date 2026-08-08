@@ -4,14 +4,13 @@ import { PreviewMessage } from "@/components/message";
 import { getDesktopURL } from "@/lib/sandbox/utils";
 import { useScrollToBottom } from "@/lib/use-scroll-to-bottom";
 import { useChat } from "@ai-sdk/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/input";
-import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { DeployButton, ProjectInfo } from "@/components/project-info";
-import { AISDKLogo } from "@/components/icons";
-import { PromptSuggestions } from "@/components/prompt-suggestions";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { AgentEventPanel } from "@/components/agent-event-panel";
+import { DesktopPanel } from "@/components/desktop-panel";
+import { EventInspector } from "@/components/event-inspector";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -19,11 +18,21 @@ import {
 } from "@/components/ui/resizable";
 import { ABORTED } from "@/lib/utils";
 import {
+  agentEventKey,
   createToolEventProjector,
+  createTurnEventProjector,
+  findToolPayload,
   lifecycleOrderFor,
   mergeAgentEvents,
   type LifecycleEvent,
 } from "@/lib/agent-events";
+
+const ChatHeader = () => (
+  <div className="flex items-center justify-between border-b border-border bg-background px-4 py-3">
+    <span className="text-sm font-semibold tracking-tight">Computer Use Agent</span>
+    <ThemeToggle />
+  </div>
+);
 
 export default function Chat() {
   // Create separate refs for mobile and desktop to ensure both scroll properly
@@ -37,12 +46,14 @@ export default function Chat() {
     () => `session-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   const [lifecycleEvents, setLifecycleEvents] = useState<LifecycleEvent[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const recordedSessionStartRef = useRef(false);
   // Lifecycle events are ordered against the conversation, not the wall clock,
   // so recording one needs the message count as of *now* — async callbacks would
   // otherwise close over a stale `messages`.
   const messageCountRef = useRef(0);
   const projectToolEventsRef = useRef(createToolEventProjector());
+  const projectTurnEventsRef = useRef(createTurnEventProjector());
 
   const {
     messages,
@@ -51,7 +62,6 @@ export default function Chat() {
     handleSubmit,
     status,
     stop: stopGeneration,
-    append,
     setMessages,
     reload,
   } = useChat({
@@ -114,33 +124,81 @@ export default function Chat() {
   const isLoading = status === "submitted" || status === "streaming";
   messageCountRef.current = messages.length;
   const toolEvents = useMemo(() => projectToolEventsRef.current(messages), [messages]);
+  // The transcript needs the same events the panel shows, looked up per call.
+  const toolEventsById = useMemo(
+    () => new Map(toolEvents.map((event) => [event.id, event])),
+    [toolEvents],
+  );
+  const turnEvents = useMemo(() => projectTurnEventsRef.current(messages), [messages]);
   const agentEvents = useMemo(
-    () => mergeAgentEvents(lifecycleEvents, toolEvents),
-    [lifecycleEvents, toolEvents],
+    () => mergeAgentEvents(lifecycleEvents, [...toolEvents, ...turnEvents]),
+    [lifecycleEvents, toolEvents, turnEvents],
   );
 
-  const recordLifecycleEvent = (
-    type: LifecycleEvent["type"],
-    label: string,
-    nextSandboxId?: string | null,
-    detail?: string,
-  ) => {
-    setLifecycleEvents((prev) => [
-      ...prev,
-      {
-        kind: "lifecycle",
-        id: crypto.randomUUID(),
-        order: lifecycleOrderFor(messageCountRef.current),
-        timestamp: new Date().toISOString(),
-        type,
-        label,
-        detail,
-        sandboxId: nextSandboxId,
-      },
-    ]);
-  };
+  const selectedEvent = useMemo(
+    () => agentEvents.find((event) => agentEventKey(event) === selectedEventId) ?? null,
+    [agentEvents, selectedEventId],
+  );
+  // Only the selected call's raw payload is ever pulled out of `messages` — it
+  // can be a megabyte of screenshot, so nothing holds it but the inspector.
+  const selectedPayload = useMemo(
+    () =>
+      selectedEvent?.kind === "tool"
+        ? findToolPayload(messages, selectedEvent.id)
+        : undefined,
+    [messages, selectedEvent],
+  );
 
-  const refreshDesktop = async () => {
+  /**
+   * Selecting from the debug panel also reveals the call in the transcript, so
+   * the flat log and the conversation stay two views of one thing rather than
+   * two places to look. Lifecycle events own no message and simply do not move
+   * the transcript.
+   *
+   * Both layouts are mounted at once behind breakpoint classes, so the hidden
+   * one is skipped by `offsetParent` rather than scrolled invisibly.
+   */
+  const selectAndRevealEvent = useCallback((eventId: string | null) => {
+    setSelectedEventId(eventId);
+    if (!eventId) return;
+
+    requestAnimationFrame(() => {
+      document
+        .querySelectorAll<HTMLElement>(`[data-event-id="${CSS.escape(eventId)}"]`)
+        .forEach((card) => {
+          if (card.offsetParent === null) return;
+          card.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+    });
+  }, []);
+
+  // Stable identity: `DesktopPanel` is memoised, and a handler rebuilt on every
+  // streamed token would defeat that outright.
+  const recordLifecycleEvent = useCallback(
+    (
+      type: LifecycleEvent["type"],
+      label: string,
+      nextSandboxId?: string | null,
+      detail?: string,
+    ) => {
+      setLifecycleEvents((prev) => [
+        ...prev,
+        {
+          kind: "lifecycle",
+          id: crypto.randomUUID(),
+          order: lifecycleOrderFor(messageCountRef.current),
+          timestamp: new Date().toISOString(),
+          type,
+          label,
+          detail,
+          sandboxId: nextSandboxId,
+        },
+      ]);
+    },
+    [],
+  );
+
+  const refreshDesktop = useCallback(async () => {
     try {
       setIsInitializing(true);
       const { streamUrl, id } = await getDesktopURL(sandboxId || undefined);
@@ -163,13 +221,13 @@ export default function Chat() {
     } finally {
       setIsInitializing(false);
     }
-  };
+  }, [sandboxId, recordLifecycleEvent]);
 
   useEffect(() => {
     if (recordedSessionStartRef.current) return;
     recordedSessionStartRef.current = true;
     recordLifecycleEvent("session_created", "Session created", null);
-  }, []);
+  }, [recordLifecycleEvent]);
 
   // Kill desktop on page close
   useEffect(() => {
@@ -214,7 +272,7 @@ export default function Chat() {
         killDesktop();
       };
     }
-  }, [sandboxId]);
+  }, [sandboxId, recordLifecycleEvent]);
 
   useEffect(() => {
     // Initialize desktop and get stream URL when the component mounts
@@ -256,59 +314,18 @@ export default function Chat() {
       {/* Resizable Panels */}
       <div className="w-full hidden xl:block">
         <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Desktop Stream Panel */}
+          {/* Chat: the transcript, the composer and the debug panel */}
           <ResizablePanel
-            defaultSize={70}
-            minSize={40}
-            className="bg-black relative items-center justify-center"
-          >
-            {streamUrl ? (
-              <>
-                <iframe
-                  src={streamUrl}
-                  className="w-full h-full"
-                  style={{
-                    transformOrigin: "center",
-                    width: "100%",
-                    height: "100%",
-                  }}
-                  allow="autoplay"
-                />
-                <Button
-                  onClick={refreshDesktop}
-                  className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white px-3 py-1 rounded text-sm z-10"
-                  disabled={isInitializing}
-                >
-                  {isInitializing ? "Creating desktop..." : "New desktop"}
-                </Button>
-              </>
-            ) : (
-              <div className="flex items-center justify-center h-full text-white">
-                {isInitializing
-                  ? "Initializing desktop..."
-                  : "Loading stream..."}
-              </div>
-            )}
-          </ResizablePanel>
-
-          <ResizableHandle withHandle />
-
-          {/* Chat Interface Panel */}
-          <ResizablePanel
-            defaultSize={30}
+            defaultSize={38}
             minSize={25}
-            className="flex flex-col border-l border-zinc-200"
+            className="flex flex-col border-r border-border bg-background"
           >
-            <div className="bg-white py-4 px-4 flex justify-between items-center">
-              <AISDKLogo />
-              <DeployButton />
-            </div>
+            <ChatHeader />
 
             <div
               className="flex-1 space-y-6 py-4 overflow-y-auto px-4"
               ref={desktopContainerRef}
             >
-              {messages.length === 0 ? <ProjectInfo /> : null}
               {messages.map((message, i) => (
                 <PreviewMessage
                   message={message}
@@ -316,22 +333,24 @@ export default function Chat() {
                   isLoading={isLoading}
                   status={status}
                   isLatestMessage={i === messages.length - 1}
+                  toolEvents={toolEventsById}
+                  selectedEventId={selectedEventId}
+                  onSelectEvent={setSelectedEventId}
                 />
               ))}
               <div ref={desktopEndRef} className="pb-2" />
             </div>
 
-            <AgentEventPanel events={agentEvents} sandboxId={sandboxId} />
+            <AgentEventPanel
+              events={agentEvents}
+              sandboxId={sandboxId}
+              sessionId={sessionId}
+              chatStatus={status}
+              selectedEventId={selectedEventId}
+              onSelectEvent={selectAndRevealEvent}
+            />
 
-            {messages.length === 0 && (
-              <PromptSuggestions
-                disabled={isInitializing}
-                submitPrompt={(prompt: string) =>
-                  append({ role: "user", content: prompt })
-                }
-              />
-            )}
-            <div className="bg-white">
+            <div className="bg-background">
               <form onSubmit={handleSubmit} className="p-4">
                 <Input
                   handleInputChange={handleInputChange}
@@ -344,21 +363,48 @@ export default function Chat() {
               </form>
             </div>
           </ResizablePanel>
+
+          <ResizableHandle withHandle />
+
+          {/* Desktop stream, with the inspector docked beneath it */}
+          <ResizablePanel defaultSize={62} minSize={40}>
+            <ResizablePanelGroup direction="vertical" className="h-full">
+              <ResizablePanel
+                defaultSize={70}
+                minSize={30}
+                className="bg-black relative items-center justify-center"
+              >
+                <DesktopPanel
+                  streamUrl={streamUrl}
+                  isInitializing={isInitializing}
+                  onRefresh={refreshDesktop}
+                />
+              </ResizablePanel>
+
+              <ResizableHandle withHandle />
+
+              <ResizablePanel
+                defaultSize={30}
+                minSize={15}
+                collapsible
+                collapsedSize={0}
+                className="border-t border-border"
+              >
+                <EventInspector event={selectedEvent} payload={selectedPayload} />
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          </ResizablePanel>
         </ResizablePanelGroup>
       </div>
 
       {/* Mobile View (Chat Only) */}
-      <div className="w-full xl:hidden flex flex-col">
-        <div className="bg-white py-4 px-4 flex justify-between items-center">
-          <AISDKLogo />
-          <DeployButton />
-        </div>
+      <div className="w-full xl:hidden flex flex-col bg-background">
+        <ChatHeader />
 
         <div
           className="flex-1 space-y-6 py-4 overflow-y-auto px-4"
           ref={mobileContainerRef}
         >
-          {messages.length === 0 ? <ProjectInfo /> : null}
           {messages.map((message, i) => (
             <PreviewMessage
               message={message}
@@ -366,22 +412,39 @@ export default function Chat() {
               isLoading={isLoading}
               status={status}
               isLatestMessage={i === messages.length - 1}
+              toolEvents={toolEventsById}
+              selectedEventId={selectedEventId}
+              onSelectEvent={setSelectedEventId}
             />
           ))}
           <div ref={mobileEndRef} className="pb-2" />
         </div>
 
-        <AgentEventPanel events={agentEvents} sandboxId={sandboxId} />
+        {/* No desktop panel to dock under here, so the inspector takes over the
+            space above the event panel while something is selected. */}
+        {selectedEvent ? (
+          <div className="relative max-h-[45dvh] overflow-y-auto border-t border-border">
+            <button
+              type="button"
+              onClick={() => setSelectedEventId(null)}
+              className="absolute right-3 top-3 z-10 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground"
+            >
+              Close
+            </button>
+            <EventInspector event={selectedEvent} payload={selectedPayload} />
+          </div>
+        ) : null}
 
-        {messages.length === 0 && (
-          <PromptSuggestions
-            disabled={isInitializing}
-            submitPrompt={(prompt: string) =>
-              append({ role: "user", content: prompt })
-            }
-          />
-        )}
-        <div className="bg-white">
+        <AgentEventPanel
+          events={agentEvents}
+          sandboxId={sandboxId}
+          sessionId={sessionId}
+          chatStatus={status}
+          selectedEventId={selectedEventId}
+          onSelectEvent={selectAndRevealEvent}
+        />
+
+        <div className="bg-background">
           <form onSubmit={handleSubmit} className="p-4">
             <Input
               handleInputChange={handleInputChange}

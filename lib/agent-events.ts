@@ -9,7 +9,10 @@ type ToolEventCommon = {
   id: string;
   messageId: string;
   /**
-   * Sort key, in the client's observation order (message index + part index).
+   * Sort key, in the client's observation order. Each message owns a block of
+   * 1000 slots; slot 0 is reserved for the message's own turn marker, so a tool
+   * call sits at `messageIndex * 1000 + partIndex + 1`.
+   *
    * Never sort the timeline on timestamps: tool timing comes from the server and
    * lifecycle timing from the browser, and those two clocks need not agree.
    */
@@ -46,6 +49,26 @@ export type OtherToolEvent = ToolEventCommon & {
 
 export type ToolEvent = ComputerEvent | BashEvent | OtherToolEvent;
 
+/**
+ * A conversational turn, recorded so the timeline has no unexplained gaps: a
+ * run that pauses for thirty seconds between two clicks should show the answer
+ * that happened in between, not a hole.
+ *
+ * It carries **no message content** — only that a turn occurred, and whose. The
+ * dividing line the event model draws is content, not existence: `messages`
+ * stays the sole owner of anything the next LLM turn replays, so clearing or
+ * reshaping events can never break chat resume.
+ */
+export type TurnEvent = {
+  kind: "turn";
+  /** The AI SDK message id; a message produces at most one turn event. */
+  id: string;
+  messageId: string;
+  order: number;
+  timestamp: string;
+  role: "user" | "assistant";
+};
+
 export type LifecycleEvent = {
   kind: "lifecycle";
   id: string;
@@ -67,7 +90,19 @@ export type LifecycleEvent = {
 export const isLifecycleFailure = (event: LifecycleEvent) =>
   event.type === "sandbox_error" || event.type === "chat_error";
 
-export type AgentEvent = ToolEvent | LifecycleEvent;
+export type AgentEvent = ToolEvent | TurnEvent | LifecycleEvent;
+
+/** Events projected from `messages`, as opposed to recorded by the app. */
+export type ProjectedEvent = ToolEvent | TurnEvent;
+
+/**
+ * Selection key. A `toolCallId` and a lifecycle UUID are drawn from different
+ * spaces and could in principle collide, so the family is part of the key.
+ *
+ * Session scoping is the caller's job: a key held across a session switch can
+ * name an event that no longer exists, so selection is cleared on switch.
+ */
+export const agentEventKey = (event: AgentEvent) => `${event.kind}-${event.id}`;
 
 type ToolInvocationPart = {
   type: "tool-invocation";
@@ -114,6 +149,35 @@ const getResultData = (result: unknown) => {
   const candidate = asRecord(result);
   if (candidate.ok !== true) return undefined;
   return candidate;
+};
+
+/**
+ * The bytes behind `hasScreenshot`. Events stay light on purpose, so whatever
+ * renders the image reads it back out of `messages` through here — this is the
+ * only sanctioned way across that boundary.
+ */
+export const getScreenshotBase64 = (result: unknown): string | undefined => {
+  const data = asRecord(getResultData(result)?.data);
+  return data.type === "image" ? asString(data.data) : undefined;
+};
+
+/**
+ * The raw invocation behind an event, for the inspector. Looked up on demand
+ * rather than indexed: only the selected event ever needs it, and a result can
+ * carry a megabyte of screenshot that nothing else should be holding onto.
+ */
+export const findToolPayload = (
+  messages: Message[],
+  toolCallId: string,
+): { args: unknown; result: unknown } | undefined => {
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (!isToolInvocationPart(part)) continue;
+      if (part.toolInvocation.toolCallId !== toolCallId) continue;
+      return { args: part.toolInvocation.args, result: part.toolInvocation.result };
+    }
+  }
+  return undefined;
 };
 
 const projectComputer = (args: unknown, result: unknown) => {
@@ -169,7 +233,7 @@ export const createToolEventProjector = (now = () => new Date().toISOString()) =
           kind: "tool",
           id: toolCallId,
           messageId: message.id,
-          order: messageIndex * 1000 + partIndex,
+          order: messageIndex * 1000 + partIndex + 1,
           timestamp: meta.startedAt ?? provisionalStart,
           status: isResult
             ? resultLooksLikeError(result)
@@ -197,6 +261,56 @@ export const createToolEventProjector = (now = () => new Date().toISOString()) =
 export const deriveToolEvents = (messages: Message[]): ToolEvent[] =>
   createToolEventProjector()(messages);
 
+const getMessageText = (message: Message) => {
+  const fromParts = message.parts
+    ?.map((part) => (part.type === "text" ? part.text : ""))
+    .join("");
+  return (fromParts || message.content || "").trim();
+};
+
+/**
+ * Projects `messages` into turn markers. An assistant message that only carried
+ * tool calls produces none: its tool events already describe it, and a marker
+ * there would be a second row saying the same thing. A user message always
+ * produces one — it is the only record that the run was asked anything.
+ *
+ * Holds the same one piece of state the tool projector does: a provisional
+ * timestamp for a message the AI SDK stamped no `createdAt` on.
+ */
+export const createTurnEventProjector = (now = () => new Date().toISOString()) => {
+  const provisionalTimestamps = new Map<string, string>();
+
+  return (messages: Message[]): TurnEvent[] => {
+    const events: TurnEvent[] = [];
+
+    messages.forEach((message, messageIndex) => {
+      if (message.role !== "user" && message.role !== "assistant") return;
+      if (message.role === "assistant" && !getMessageText(message)) return;
+
+      let provisional = provisionalTimestamps.get(message.id);
+      if (!provisional) {
+        provisional = now();
+        provisionalTimestamps.set(message.id, provisional);
+      }
+
+      events.push({
+        kind: "turn",
+        id: message.id,
+        messageId: message.id,
+        // Slot 0 of the message's block: ahead of every tool call it made.
+        order: messageIndex * 1000,
+        timestamp: message.createdAt?.toISOString() ?? provisional,
+        role: message.role,
+      });
+    });
+
+    return events;
+  };
+};
+
+export const deriveTurnEvents = (messages: Message[]): TurnEvent[] =>
+  createTurnEventProjector()(messages);
+
 /**
  * Both families are keyed in the same observation-order space, so a plain sort
  * interleaves them. Equal keys keep insertion order — `Array.prototype.sort` is
@@ -204,13 +318,14 @@ export const deriveToolEvents = (messages: Message[]): ToolEvent[] =>
  */
 export const mergeAgentEvents = (
   lifecycleEvents: LifecycleEvent[],
-  toolEvents: ToolEvent[],
+  projectedEvents: ProjectedEvent[],
 ): AgentEvent[] => {
-  return [...lifecycleEvents, ...toolEvents].sort((a, b) => a.order - b.order);
+  return [...lifecycleEvents, ...projectedEvents].sort((a, b) => a.order - b.order);
 };
 
 /**
- * The order a lifecycle event observed *now* should occupy: after every tool
- * event of the messages that already exist, before the next message's.
+ * The order a lifecycle event observed *now* should occupy: after everything
+ * belonging to the messages that already exist, and before the next message's
+ * turn marker, which opens that message's block at slot 0.
  */
 export const lifecycleOrderFor = (messageCount: number) => messageCount * 1000 - 1;
