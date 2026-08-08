@@ -1,5 +1,6 @@
 import { streamText, UIMessage } from "ai";
 import { agentModel } from "@/lib/ai/provider";
+import { describeStreamError } from "@/lib/ai/errors";
 import { killDesktop } from "@/lib/sandbox/utils";
 import { bashTool, computerTool, resolution } from "@/lib/sandbox/tool";
 import { prunedMessages } from "@/lib/utils";
@@ -31,10 +32,9 @@ export async function POST(req: Request) {
 
     // Create response stream
     const response = result.toDataStreamResponse({
-      // @ts-expect-error eheljfe
       getErrorMessage(error) {
         console.error(error);
-        return error;
+        return describeStreamError(error);
       },
     });
 
