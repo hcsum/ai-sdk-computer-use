@@ -24,7 +24,7 @@ const ToolStatusIcon = ({
     // A call still marked pending on a settled turn never came back — that is a
     // stopped run, not one in flight.
     return isLatestMessage && status !== "ready" ? (
-      <Loader2 className="animate-spin h-4 w-4 text-zinc-500" />
+      <Loader2 className="animate-spin h-4 w-4 text-muted-foreground" />
     ) : (
       <StopCircle className="h-4 w-4 text-red-500" />
     );
@@ -137,21 +137,21 @@ const PurePreviewMessage = ({
                         onSelectEvent(isSelected ? null : eventKey);
                       }}
                       className={cn(
-                        "flex flex-col gap-2 p-2 mb-3 text-sm bg-zinc-50 dark:bg-zinc-900 rounded-md border cursor-pointer transition-colors",
+                        "flex flex-col gap-2 p-2 mb-3 text-sm bg-muted/50 rounded-md border cursor-pointer transition-colors",
                         isSelected
                           ? "border-blue-400 ring-1 ring-blue-200 dark:border-blue-500"
-                          : "border-zinc-200 dark:border-zinc-800 hover:border-zinc-300",
+                          : "border-border hover:border-foreground/30",
                       )}
                     >
                       <div className="flex-1 flex items-center justify-center">
-                        <div className="flex items-center justify-center w-8 h-8 bg-zinc-50 dark:bg-zinc-800 rounded-full">
+                        <div className="flex items-center justify-center w-8 h-8 bg-background rounded-full">
                           <ActionIcon className="w-4 h-4" />
                         </div>
                         <div className="flex-1">
                           <div className="font-medium font-mono flex items-baseline gap-2">
                             {title}
                             {detail && (
-                              <span className="text-xs text-zinc-500 dark:text-zinc-400 font-normal">
+                              <span className="text-xs text-muted-foreground font-normal">
                                 {detail}
                               </span>
                             )}
@@ -175,7 +175,7 @@ const PurePreviewMessage = ({
                           />
                         </div>
                       ) : awaitingScreenshot ? (
-                        <div className="w-full aspect-[1024/768] rounded-sm bg-zinc-200 dark:bg-zinc-800 animate-pulse" />
+                        <div className="w-full aspect-[1024/768] rounded-sm bg-muted animate-pulse" />
                       ) : null}
                     </motion.div>
                   );

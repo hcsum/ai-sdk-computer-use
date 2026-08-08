@@ -7,9 +7,7 @@ import { useChat } from "@ai-sdk/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/input";
 import { toast } from "sonner";
-import { DeployButton, ProjectInfo } from "@/components/project-info";
-import { AISDKLogo } from "@/components/icons";
-import { PromptSuggestions } from "@/components/prompt-suggestions";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { AgentEventPanel } from "@/components/agent-event-panel";
 import { DesktopPanel } from "@/components/desktop-panel";
 import { EventInspector } from "@/components/event-inspector";
@@ -28,6 +26,13 @@ import {
   mergeAgentEvents,
   type LifecycleEvent,
 } from "@/lib/agent-events";
+
+const ChatHeader = () => (
+  <div className="flex items-center justify-between border-b border-border bg-background px-4 py-3">
+    <span className="text-sm font-semibold tracking-tight">Computer Use Agent</span>
+    <ThemeToggle />
+  </div>
+);
 
 export default function Chat() {
   // Create separate refs for mobile and desktop to ensure both scroll properly
@@ -57,7 +62,6 @@ export default function Chat() {
     handleSubmit,
     status,
     stop: stopGeneration,
-    append,
     setMessages,
     reload,
   } = useChat({
@@ -314,18 +318,14 @@ export default function Chat() {
           <ResizablePanel
             defaultSize={38}
             minSize={25}
-            className="flex flex-col border-r border-zinc-200"
+            className="flex flex-col border-r border-border bg-background"
           >
-            <div className="bg-white py-4 px-4 flex justify-between items-center">
-              <AISDKLogo />
-              <DeployButton />
-            </div>
+            <ChatHeader />
 
             <div
               className="flex-1 space-y-6 py-4 overflow-y-auto px-4"
               ref={desktopContainerRef}
             >
-              {messages.length === 0 ? <ProjectInfo /> : null}
               {messages.map((message, i) => (
                 <PreviewMessage
                   message={message}
@@ -350,15 +350,7 @@ export default function Chat() {
               onSelectEvent={selectAndRevealEvent}
             />
 
-            {messages.length === 0 && (
-              <PromptSuggestions
-                disabled={isInitializing}
-                submitPrompt={(prompt: string) =>
-                  append({ role: "user", content: prompt })
-                }
-              />
-            )}
-            <div className="bg-white">
+            <div className="bg-background">
               <form onSubmit={handleSubmit} className="p-4">
                 <Input
                   handleInputChange={handleInputChange}
@@ -396,7 +388,7 @@ export default function Chat() {
                 minSize={15}
                 collapsible
                 collapsedSize={0}
-                className="border-t border-zinc-200"
+                className="border-t border-border"
               >
                 <EventInspector event={selectedEvent} payload={selectedPayload} />
               </ResizablePanel>
@@ -406,17 +398,13 @@ export default function Chat() {
       </div>
 
       {/* Mobile View (Chat Only) */}
-      <div className="w-full xl:hidden flex flex-col">
-        <div className="bg-white py-4 px-4 flex justify-between items-center">
-          <AISDKLogo />
-          <DeployButton />
-        </div>
+      <div className="w-full xl:hidden flex flex-col bg-background">
+        <ChatHeader />
 
         <div
           className="flex-1 space-y-6 py-4 overflow-y-auto px-4"
           ref={mobileContainerRef}
         >
-          {messages.length === 0 ? <ProjectInfo /> : null}
           {messages.map((message, i) => (
             <PreviewMessage
               message={message}
@@ -435,11 +423,11 @@ export default function Chat() {
         {/* No desktop panel to dock under here, so the inspector takes over the
             space above the event panel while something is selected. */}
         {selectedEvent ? (
-          <div className="relative max-h-[45dvh] overflow-y-auto border-t border-zinc-200">
+          <div className="relative max-h-[45dvh] overflow-y-auto border-t border-border">
             <button
               type="button"
               onClick={() => setSelectedEventId(null)}
-              className="absolute right-3 top-3 z-10 rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[11px] text-zinc-500"
+              className="absolute right-3 top-3 z-10 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground"
             >
               Close
             </button>
@@ -456,15 +444,7 @@ export default function Chat() {
           onSelectEvent={selectAndRevealEvent}
         />
 
-        {messages.length === 0 && (
-          <PromptSuggestions
-            disabled={isInitializing}
-            submitPrompt={(prompt: string) =>
-              append({ role: "user", content: prompt })
-            }
-          />
-        )}
-        <div className="bg-white">
+        <div className="bg-background">
           <form onSubmit={handleSubmit} className="p-4">
             <Input
               handleInputChange={handleInputChange}
