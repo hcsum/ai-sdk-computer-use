@@ -4,14 +4,15 @@ import { PreviewMessage } from "@/components/message";
 import { getDesktopURL } from "@/lib/sandbox/utils";
 import { useScrollToBottom } from "@/lib/use-scroll-to-bottom";
 import { useChat } from "@ai-sdk/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/input";
-import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { DeployButton, ProjectInfo } from "@/components/project-info";
 import { AISDKLogo } from "@/components/icons";
 import { PromptSuggestions } from "@/components/prompt-suggestions";
 import { AgentEventPanel } from "@/components/agent-event-panel";
+import { DesktopPanel } from "@/components/desktop-panel";
+import { EventInspector } from "@/components/event-inspector";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -19,7 +20,9 @@ import {
 } from "@/components/ui/resizable";
 import { ABORTED } from "@/lib/utils";
 import {
+  agentEventKey,
   createToolEventProjector,
+  findToolPayload,
   lifecycleOrderFor,
   mergeAgentEvents,
   type LifecycleEvent,
@@ -37,6 +40,7 @@ export default function Chat() {
     () => `session-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   const [lifecycleEvents, setLifecycleEvents] = useState<LifecycleEvent[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const recordedSessionStartRef = useRef(false);
   // Lifecycle events are ordered against the conversation, not the wall clock,
   // so recording one needs the message count as of *now* — async callbacks would
@@ -124,28 +128,47 @@ export default function Chat() {
     [lifecycleEvents, toolEvents],
   );
 
-  const recordLifecycleEvent = (
-    type: LifecycleEvent["type"],
-    label: string,
-    nextSandboxId?: string | null,
-    detail?: string,
-  ) => {
-    setLifecycleEvents((prev) => [
-      ...prev,
-      {
-        kind: "lifecycle",
-        id: crypto.randomUUID(),
-        order: lifecycleOrderFor(messageCountRef.current),
-        timestamp: new Date().toISOString(),
-        type,
-        label,
-        detail,
-        sandboxId: nextSandboxId,
-      },
-    ]);
-  };
+  const selectedEvent = useMemo(
+    () => agentEvents.find((event) => agentEventKey(event) === selectedEventId) ?? null,
+    [agentEvents, selectedEventId],
+  );
+  // Only the selected call's raw payload is ever pulled out of `messages` — it
+  // can be a megabyte of screenshot, so nothing holds it but the inspector.
+  const selectedPayload = useMemo(
+    () =>
+      selectedEvent?.kind === "tool"
+        ? findToolPayload(messages, selectedEvent.id)
+        : undefined,
+    [messages, selectedEvent],
+  );
 
-  const refreshDesktop = async () => {
+  // Stable identity: `DesktopPanel` is memoised, and a handler rebuilt on every
+  // streamed token would defeat that outright.
+  const recordLifecycleEvent = useCallback(
+    (
+      type: LifecycleEvent["type"],
+      label: string,
+      nextSandboxId?: string | null,
+      detail?: string,
+    ) => {
+      setLifecycleEvents((prev) => [
+        ...prev,
+        {
+          kind: "lifecycle",
+          id: crypto.randomUUID(),
+          order: lifecycleOrderFor(messageCountRef.current),
+          timestamp: new Date().toISOString(),
+          type,
+          label,
+          detail,
+          sandboxId: nextSandboxId,
+        },
+      ]);
+    },
+    [],
+  );
+
+  const refreshDesktop = useCallback(async () => {
     try {
       setIsInitializing(true);
       const { streamUrl, id } = await getDesktopURL(sandboxId || undefined);
@@ -168,13 +191,13 @@ export default function Chat() {
     } finally {
       setIsInitializing(false);
     }
-  };
+  }, [sandboxId, recordLifecycleEvent]);
 
   useEffect(() => {
     if (recordedSessionStartRef.current) return;
     recordedSessionStartRef.current = true;
     recordLifecycleEvent("session_created", "Session created", null);
-  }, []);
+  }, [recordLifecycleEvent]);
 
   // Kill desktop on page close
   useEffect(() => {
@@ -219,7 +242,7 @@ export default function Chat() {
         killDesktop();
       };
     }
-  }, [sandboxId]);
+  }, [sandboxId, recordLifecycleEvent]);
 
   useEffect(() => {
     // Initialize desktop and get stream URL when the component mounts
@@ -261,39 +284,33 @@ export default function Chat() {
       {/* Resizable Panels */}
       <div className="w-full hidden xl:block">
         <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Desktop Stream Panel */}
-          <ResizablePanel
-            defaultSize={70}
-            minSize={40}
-            className="bg-black relative items-center justify-center"
-          >
-            {streamUrl ? (
-              <>
-                <iframe
-                  src={streamUrl}
-                  className="w-full h-full"
-                  style={{
-                    transformOrigin: "center",
-                    width: "100%",
-                    height: "100%",
-                  }}
-                  allow="autoplay"
+          {/* Desktop stream, with the inspector docked beneath it */}
+          <ResizablePanel defaultSize={70} minSize={40}>
+            <ResizablePanelGroup direction="vertical" className="h-full">
+              <ResizablePanel
+                defaultSize={70}
+                minSize={30}
+                className="bg-black relative items-center justify-center"
+              >
+                <DesktopPanel
+                  streamUrl={streamUrl}
+                  isInitializing={isInitializing}
+                  onRefresh={refreshDesktop}
                 />
-                <Button
-                  onClick={refreshDesktop}
-                  className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white px-3 py-1 rounded text-sm z-10"
-                  disabled={isInitializing}
-                >
-                  {isInitializing ? "Creating desktop..." : "New desktop"}
-                </Button>
-              </>
-            ) : (
-              <div className="flex items-center justify-center h-full text-white">
-                {isInitializing
-                  ? "Initializing desktop..."
-                  : "Loading stream..."}
-              </div>
-            )}
+              </ResizablePanel>
+
+              <ResizableHandle withHandle />
+
+              <ResizablePanel
+                defaultSize={30}
+                minSize={15}
+                collapsible
+                collapsedSize={0}
+                className="border-t border-zinc-200"
+              >
+                <EventInspector event={selectedEvent} payload={selectedPayload} />
+              </ResizablePanel>
+            </ResizablePanelGroup>
           </ResizablePanel>
 
           <ResizableHandle withHandle />
@@ -322,12 +339,19 @@ export default function Chat() {
                   status={status}
                   isLatestMessage={i === messages.length - 1}
                   toolEvents={toolEventsById}
+                  selectedEventId={selectedEventId}
+                  onSelectEvent={setSelectedEventId}
                 />
               ))}
               <div ref={desktopEndRef} className="pb-2" />
             </div>
 
-            <AgentEventPanel events={agentEvents} sandboxId={sandboxId} />
+            <AgentEventPanel
+              events={agentEvents}
+              sandboxId={sandboxId}
+              selectedEventId={selectedEventId}
+              onSelectEvent={setSelectedEventId}
+            />
 
             {messages.length === 0 && (
               <PromptSuggestions
@@ -372,13 +396,35 @@ export default function Chat() {
               isLoading={isLoading}
               status={status}
               isLatestMessage={i === messages.length - 1}
-                  toolEvents={toolEventsById}
+              toolEvents={toolEventsById}
+              selectedEventId={selectedEventId}
+              onSelectEvent={setSelectedEventId}
             />
           ))}
           <div ref={mobileEndRef} className="pb-2" />
         </div>
 
-        <AgentEventPanel events={agentEvents} sandboxId={sandboxId} />
+        {/* No desktop panel to dock under here, so the inspector takes over the
+            space above the event panel while something is selected. */}
+        {selectedEvent ? (
+          <div className="relative max-h-[45dvh] overflow-y-auto border-t border-zinc-200">
+            <button
+              type="button"
+              onClick={() => setSelectedEventId(null)}
+              className="absolute right-3 top-3 z-10 rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[11px] text-zinc-500"
+            >
+              Close
+            </button>
+            <EventInspector event={selectedEvent} payload={selectedPayload} />
+          </div>
+        ) : null}
+
+        <AgentEventPanel
+          events={agentEvents}
+          sandboxId={sandboxId}
+          selectedEventId={selectedEventId}
+          onSelectEvent={setSelectedEventId}
+        />
 
         {messages.length === 0 && (
           <PromptSuggestions

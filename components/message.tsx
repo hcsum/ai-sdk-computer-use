@@ -7,7 +7,7 @@ import equal from "fast-deep-equal";
 import { Streamdown } from "streamdown";
 
 import { ABORTED, cn } from "@/lib/utils";
-import { getScreenshotBase64, type ToolEvent } from "@/lib/agent-events";
+import { agentEventKey, getScreenshotBase64, type ToolEvent } from "@/lib/agent-events";
 import { describeToolAction } from "@/lib/tool-event-display";
 import { CheckCircle, CircleSlash, Loader2, StopCircle } from "lucide-react";
 
@@ -47,6 +47,8 @@ const PurePreviewMessage = ({
   isLatestMessage,
   status,
   toolEvents,
+  selectedEventId,
+  onSelectEvent,
 }: {
   message: Message;
   isLoading: boolean;
@@ -54,6 +56,8 @@ const PurePreviewMessage = ({
   isLatestMessage: boolean;
   /** The projected events for the whole conversation, keyed by tool call id. */
   toolEvents: Map<string, ToolEvent>;
+  selectedEventId: string | null;
+  onSelectEvent: (eventId: string | null) => void;
 }) => {
   return (
     <AnimatePresence key={message.id}>
@@ -111,12 +115,31 @@ const PurePreviewMessage = ({
                     event.action === "screenshot" &&
                     event.status === "pending";
 
+                  const eventKey = agentEventKey(event);
+                  const isSelected = eventKey === selectedEventId;
+
                   return (
                     <motion.div
                       initial={{ y: 5, opacity: 0 }}
                       animate={{ y: 0, opacity: 1 }}
                       key={`message-${message.id}-part-${i}`}
-                      className="flex flex-col gap-2 p-2 mb-3 text-sm bg-zinc-50 dark:bg-zinc-900 rounded-md border border-zinc-200 dark:border-zinc-800"
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={isSelected}
+                      // Clicking the same card again clears the inspector, so a
+                      // selection is never a state the user cannot get out of.
+                      onClick={() => onSelectEvent(isSelected ? null : eventKey)}
+                      onKeyDown={(keyEvent) => {
+                        if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+                        keyEvent.preventDefault();
+                        onSelectEvent(isSelected ? null : eventKey);
+                      }}
+                      className={cn(
+                        "flex flex-col gap-2 p-2 mb-3 text-sm bg-zinc-50 dark:bg-zinc-900 rounded-md border cursor-pointer transition-colors",
+                        isSelected
+                          ? "border-blue-400 ring-1 ring-blue-200 dark:border-blue-500"
+                          : "border-zinc-200 dark:border-zinc-800 hover:border-zinc-300",
+                      )}
                     >
                       <div className="flex-1 flex items-center justify-center">
                         <div className="flex items-center justify-center w-8 h-8 bg-zinc-50 dark:bg-zinc-800 rounded-full">
@@ -171,6 +194,9 @@ export const PreviewMessage = memo(
   PurePreviewMessage,
   (prevProps, nextProps) => {
     if (prevProps.status !== nextProps.status) return false;
+    // Selection is a click, not a token, so re-rendering every message on it is
+    // cheap — and cheaper than tracking which message owns the selected event.
+    if (prevProps.selectedEventId !== nextProps.selectedEventId) return false;
     if (prevProps.message.annotations !== nextProps.message.annotations)
       return false;
     if (!equal(prevProps.message.parts, nextProps.message.parts)) return false;

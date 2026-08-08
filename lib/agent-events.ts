@@ -69,6 +69,15 @@ export const isLifecycleFailure = (event: LifecycleEvent) =>
 
 export type AgentEvent = ToolEvent | LifecycleEvent;
 
+/**
+ * Selection key. A `toolCallId` and a lifecycle UUID are drawn from different
+ * spaces and could in principle collide, so the family is part of the key.
+ *
+ * Session scoping is the caller's job: a key held across a session switch can
+ * name an event that no longer exists, so selection is cleared on switch.
+ */
+export const agentEventKey = (event: AgentEvent) => `${event.kind}-${event.id}`;
+
 type ToolInvocationPart = {
   type: "tool-invocation";
   toolInvocation: {
@@ -124,6 +133,25 @@ const getResultData = (result: unknown) => {
 export const getScreenshotBase64 = (result: unknown): string | undefined => {
   const data = asRecord(getResultData(result)?.data);
   return data.type === "image" ? asString(data.data) : undefined;
+};
+
+/**
+ * The raw invocation behind an event, for the inspector. Looked up on demand
+ * rather than indexed: only the selected event ever needs it, and a result can
+ * carry a megabyte of screenshot that nothing else should be holding onto.
+ */
+export const findToolPayload = (
+  messages: Message[],
+  toolCallId: string,
+): { args: unknown; result: unknown } | undefined => {
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (!isToolInvocationPart(part)) continue;
+      if (part.toolInvocation.toolCallId !== toolCallId) continue;
+      return { args: part.toolInvocation.args, result: part.toolInvocation.result };
+    }
+  }
+  return undefined;
 };
 
 const projectComputer = (args: unknown, result: unknown) => {

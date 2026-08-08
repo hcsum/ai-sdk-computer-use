@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Message } from "ai";
 
 import {
+  agentEventKey,
   createToolEventProjector,
   deriveToolEvents,
+  findToolPayload,
   getScreenshotBase64,
   lifecycleOrderFor,
   mergeAgentEvents,
@@ -155,8 +157,72 @@ describe("getScreenshotBase64", () => {
   });
 });
 
-describe("deriveToolEvents, continued", () => {
+describe("findToolPayload", () => {
+  const messages = [
+    makeMessage(
+      [
+        toolPart({
+          toolCallId: "tool-1",
+          toolName: "computer",
+          state: "result",
+          args: { action: "left_click", coordinate: [1, 2] },
+          result: { ok: true, data: { type: "text", text: "clicked" } },
+        }),
+      ],
+      "message-1",
+    ),
+    makeMessage(
+      [toolPart({ toolCallId: "tool-2", toolName: "bash", state: "call", args: { command: "ls" } })],
+      "message-2",
+    ),
+  ];
 
+  it("finds a call in a later message", () => {
+    expect(findToolPayload(messages, "tool-2")).toEqual({
+      args: { command: "ls" },
+      result: undefined,
+    });
+  });
+
+  it("returns the raw result the event deliberately summarised", () => {
+    expect(findToolPayload(messages, "tool-1")?.result).toEqual({
+      ok: true,
+      data: { type: "text", text: "clicked" },
+    });
+  });
+
+  it("returns nothing for an unknown call", () => {
+    expect(findToolPayload(messages, "tool-404")).toBeUndefined();
+  });
+});
+
+describe("agentEventKey", () => {
+  it("keeps the two event families in separate key spaces", () => {
+    const shared = "0193f0de-collision";
+    const toolEvent = deriveToolEvents([
+      makeMessage([
+        toolPart({
+          toolCallId: shared,
+          toolName: "computer",
+          state: "call",
+          args: { action: "screenshot" },
+        }),
+      ]),
+    ])[0];
+    const lifecycleEvent: LifecycleEvent = {
+      kind: "lifecycle",
+      id: shared,
+      order: 0,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      type: "session_created",
+      label: "Session created",
+    };
+
+    expect(agentEventKey(toolEvent)).not.toBe(agentEventKey(lifecycleEvent));
+  });
+});
+
+describe("deriveToolEvents, continued", () => {
   it("treats a user abort as an error rather than a completed call", () => {
     const events = deriveToolEvents([
       makeMessage([

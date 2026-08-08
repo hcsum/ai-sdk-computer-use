@@ -1,6 +1,6 @@
 "use client";
 
-import { isLifecycleFailure, type AgentEvent } from "@/lib/agent-events";
+import { agentEventKey, isLifecycleFailure, type AgentEvent } from "@/lib/agent-events";
 import { describeToolEvent, formatDuration } from "@/lib/tool-event-display";
 import { cn } from "@/lib/utils";
 import { Activity, CheckCircle2, CircleAlert, Clock3, MonitorUp } from "lucide-react";
@@ -8,6 +8,8 @@ import { Activity, CheckCircle2, CircleAlert, Clock3, MonitorUp } from "lucide-r
 type AgentEventPanelProps = {
   events: AgentEvent[];
   sandboxId: string | null;
+  selectedEventId: string | null;
+  onSelectEvent: (eventId: string | null) => void;
 };
 
 const getStatusIcon = (event: AgentEvent) => {
@@ -20,7 +22,12 @@ const getStatusIcon = (event: AgentEvent) => {
 const isFailure = (event: AgentEvent) =>
   event.kind === "lifecycle" ? isLifecycleFailure(event) : event.status === "error";
 
-export function AgentEventPanel({ events, sandboxId }: AgentEventPanelProps) {
+export function AgentEventPanel({
+  events,
+  sandboxId,
+  selectedEventId,
+  onSelectEvent,
+}: AgentEventPanelProps) {
   const toolEvents = events.filter((event) => event.kind === "tool");
   const pendingCount = toolEvents.filter((event) => event.kind === "tool" && event.status === "pending").length;
   const failureCount = events.filter(isFailure).length;
@@ -64,10 +71,21 @@ export function AgentEventPanel({ events, sandboxId }: AgentEventPanelProps) {
             // The cause line: a tool's error, or a failed lifecycle event's detail.
             const cause = event.kind === "tool" ? event.error : event.detail;
 
+            const eventKey = agentEventKey(event);
+            const isSelected = eventKey === selectedEventId;
+
             return (
-              <div
-                key={`${event.kind}-${event.id}`}
-                className="grid grid-cols-[24px_1fr] gap-2 rounded-lg border border-zinc-200 bg-white p-2 text-xs"
+              <button
+                type="button"
+                key={eventKey}
+                aria-pressed={isSelected}
+                onClick={() => onSelectEvent(isSelected ? null : eventKey)}
+                className={cn(
+                  "grid w-full grid-cols-[24px_1fr] gap-2 rounded-lg border bg-white p-2 text-left text-xs transition-colors",
+                  isSelected
+                    ? "border-blue-400 ring-1 ring-blue-200"
+                    : "border-zinc-200 hover:border-zinc-300",
+                )}
               >
                 <div
                   className={cn(
@@ -104,7 +122,7 @@ export function AgentEventPanel({ events, sandboxId }: AgentEventPanelProps) {
                     </div>
                   ) : null}
                 </div>
-              </div>
+              </button>
             );
           })
         )}
