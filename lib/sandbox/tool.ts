@@ -74,10 +74,51 @@ type ComputerInput = {
   start_coordinate?: number[];
 };
 
-type ComputerResult =
+type ComputerResultData =
   { type: "image"; data: string } | { type: "text"; text: string };
 
-const executeComputerAction =
+type ExecutionMeta = {
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+};
+
+type ComputerResult =
+  | ({ ok: true; data: ComputerResultData } & ExecutionMeta)
+  | ({ ok: false; error: string } & ExecutionMeta);
+
+type BashResult =
+  | ({ ok: true; stdout: string } & ExecutionMeta)
+  | ({ ok: false; error: string; stdout?: string } & ExecutionMeta);
+
+const withExecutionMeta = async <T,>(
+  run: () => Promise<T>,
+): Promise<({ ok: true; data: T } | { ok: false; error: string }) & ExecutionMeta> => {
+  const started = performance.now();
+  const startedAt = new Date().toISOString();
+  try {
+    const data = await run();
+    const completedAt = new Date().toISOString();
+    return {
+      ok: true,
+      data,
+      startedAt,
+      completedAt,
+      durationMs: Math.round(performance.now() - started),
+    };
+  } catch (error) {
+    const completedAt = new Date().toISOString();
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      startedAt,
+      completedAt,
+      durationMs: Math.round(performance.now() - started),
+    };
+  }
+};
+
+const runComputerAction =
   (sandboxId: string) =>
   async ({
     action,
@@ -87,7 +128,7 @@ const executeComputerAction =
     scroll_amount,
     scroll_direction,
     start_coordinate,
-  }: ComputerInput): Promise<ComputerResult> => {
+  }: ComputerInput): Promise<ComputerResultData> => {
     const sandbox = await getDesktop(sandboxId);
 
     switch (action) {
@@ -243,27 +284,48 @@ const executeComputerAction =
     }
   };
 
+const executeComputerAction =
+  (sandboxId: string) =>
+  async (input: ComputerInput): Promise<ComputerResult> =>
+    withExecutionMeta(() => runComputerAction(sandboxId)(input));
+
 /**
- * Screenshots come back as base64 PNGs; everything else is plain text. Both the
- * native and the schema-described computer tool report results the same way.
+ * Only screenshot/text content is exposed to the model. Execution metadata stays
+ * in the UI message result for the dashboard and must not be stringified into the
+ * model-facing tool result content.
  */
 function toToolResultContent(result: ComputerResult | string) {
   if (typeof result === "string") {
     return [{ type: "text" as const, text: result }];
   }
-  if (result.type === "image" && result.data) {
+  if (!result.ok) {
+    return [{ type: "text" as const, text: `Error: ${result.error}` }];
+  }
+  if (result.data.type === "image" && result.data.data) {
     return [
       {
         type: "image" as const,
-        data: result.data,
+        data: result.data.data,
         mimeType: "image/png",
       },
     ];
   }
-  if (result.type === "text" && result.text) {
-    return [{ type: "text" as const, text: result.text }];
+  if (result.data.type === "text" && result.data.text) {
+    return [{ type: "text" as const, text: result.data.text }];
   }
   throw new Error("Invalid result format");
+}
+
+function toBashToolResultContent(result: BashResult | string) {
+  if (typeof result === "string") {
+    return [{ type: "text" as const, text: result }];
+  }
+  return [
+    {
+      type: "text" as const,
+      text: result.ok ? result.stdout : `Error: ${result.error}`,
+    },
+  ];
 }
 
 /**
@@ -376,10 +438,9 @@ export const computerTool = (sandboxId: string) => {
 
 const executeBash =
   (sandboxId?: string) =>
-  async ({ command }: { command: string }) => {
-    const sandbox = await getDesktop(sandboxId);
-
-    try {
+  async ({ command }: { command: string }): Promise<BashResult> => {
+    const result = await withExecutionMeta(async () => {
+      const sandbox = await getDesktop(sandboxId);
       const result = await sandbox.runCommand({
         cmd: "bash",
         args: ["-c", command],
@@ -387,14 +448,14 @@ const executeBash =
       });
       const stdout = await result.stdout();
       return stdout || "(Command executed successfully with no output)";
-    } catch (error) {
-      console.error("Bash command failed:", error);
-      if (error instanceof Error) {
-        return `Error executing command: ${error.message}`;
-      } else {
-        return `Error executing command: ${String(error)}`;
-      }
+    });
+
+    if (result.ok) {
+      const { data, ...meta } = result;
+      return { ...meta, stdout: data };
     }
+    console.error("Bash command failed:", result.error);
+    return result;
   };
 
 export const bashTool = (sandboxId?: string) => {
@@ -413,5 +474,6 @@ export const bashTool = (sandboxId?: string) => {
       command: z.string().describe("The bash command to run."),
     }),
     execute,
+    experimental_toToolResultContent: toBashToolResultContent,
   });
 };
