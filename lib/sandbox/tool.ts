@@ -1,4 +1,6 @@
-import { anthropic } from "@ai-sdk/anthropic";
+import { tool } from "ai";
+import { z } from "zod";
+import { anthropicProvider } from "@/lib/ai/provider";
 import { getDesktop } from "./utils";
 
 const wait = async (seconds: number) => {
@@ -57,216 +59,359 @@ function mapKey(key: string): string {
   return keyMap[key.toLowerCase()] || keyMap[key] || key;
 }
 
-export const computerTool = (sandboxId: string) =>
-  anthropic.tools.computer_20250124({
-    displayWidthPx: resolution.x,
-    displayHeightPx: resolution.y,
-    displayNumber: 1,
-    execute: async ({
-      action,
-      coordinate,
-      text,
-      duration,
-      scroll_amount,
-      scroll_direction,
-      start_coordinate,
-    }) => {
-      const sandbox = await getDesktop(sandboxId);
+/**
+ * The arguments every computer action can carry. Deliberately a superset of the
+ * fields Anthropic's `computer_20250124` tool sends, so the same executor backs
+ * both the provider-defined tool and the schema-described fallback below.
+ */
+type ComputerInput = {
+  action: string;
+  coordinate?: number[];
+  text?: string;
+  duration?: number;
+  scroll_amount?: number;
+  scroll_direction?: string;
+  start_coordinate?: number[];
+};
 
-      switch (action) {
-        case "screenshot": {
-          await sandbox.runCommand({
-            cmd: "import",
-            args: ["-window", "root", "/tmp/screenshot.png"],
-            env: DISPLAY_ENV,
-          });
-          const buffer = await sandbox.readFileToBuffer({
-            path: "/tmp/screenshot.png",
-          });
-          if (!buffer) throw new Error("Failed to read screenshot");
-          const base64Data = buffer.toString("base64");
-          return {
-            type: "image" as const,
-            data: base64Data,
-          };
-        }
-        case "wait": {
-          if (!duration) throw new Error("Duration required for wait action");
-          const actualDuration = Math.min(duration, 2);
-          await wait(actualDuration);
-          return {
-            type: "text" as const,
-            text: `Waited for ${actualDuration} seconds`,
-          };
-        }
-        case "left_click": {
-          if (!coordinate)
-            throw new Error("Coordinate required for left click action");
-          const [x, y] = coordinate;
-          await sandbox.runCommand({
-            cmd: "xdotool",
-            args: ["mousemove", "--sync", String(x), String(y), "click", "1"],
-            env: DISPLAY_ENV,
-          });
-          return { type: "text" as const, text: `Left clicked at ${x}, ${y}` };
-        }
-        case "double_click": {
-          if (!coordinate)
-            throw new Error("Coordinate required for double click action");
-          const [x, y] = coordinate;
-          await sandbox.runCommand({
-            cmd: "xdotool",
-            args: [
-              "mousemove",
-              "--sync",
-              String(x),
-              String(y),
-              "click",
-              "--repeat",
-              "2",
-              "1",
-            ],
-            env: DISPLAY_ENV,
-          });
-          return {
-            type: "text" as const,
-            text: `Double clicked at ${x}, ${y}`,
-          };
-        }
-        case "right_click": {
-          if (!coordinate)
-            throw new Error("Coordinate required for right click action");
-          const [x, y] = coordinate;
-          await sandbox.runCommand({
-            cmd: "xdotool",
-            args: ["mousemove", "--sync", String(x), String(y), "click", "3"],
-            env: DISPLAY_ENV,
-          });
-          return {
-            type: "text" as const,
-            text: `Right clicked at ${x}, ${y}`,
-          };
-        }
-        case "mouse_move": {
-          if (!coordinate)
-            throw new Error("Coordinate required for mouse move action");
-          const [x, y] = coordinate;
-          await sandbox.runCommand({
-            cmd: "xdotool",
-            args: ["mousemove", "--sync", String(x), String(y)],
-            env: DISPLAY_ENV,
-          });
-          return { type: "text" as const, text: `Moved mouse to ${x}, ${y}` };
-        }
-        case "type": {
-          if (!text) throw new Error("Text required for type action");
-          await sandbox.runCommand({
-            cmd: "xdotool",
-            args: ["type", "--clearmodifiers", text],
-            env: DISPLAY_ENV,
-          });
-          return { type: "text" as const, text: `Typed: ${text}` };
-        }
-        case "key": {
-          if (!text) throw new Error("Key required for key action");
-          const mappedKey = mapKey(text);
-          await sandbox.runCommand({
-            cmd: "xdotool",
-            args: ["key", mappedKey],
-            env: DISPLAY_ENV,
-          });
-          return { type: "text" as const, text: `Pressed key: ${text}` };
-        }
-        case "scroll": {
-          if (!scroll_direction)
-            throw new Error("Scroll direction required for scroll action");
-          if (!scroll_amount)
-            throw new Error("Scroll amount required for scroll action");
-          // Button 4 = scroll up, button 5 = scroll down
-          const button = scroll_direction === "up" ? "4" : "5";
-          await sandbox.runCommand({
-            cmd: "xdotool",
-            args: ["click", "--repeat", String(scroll_amount), button],
-            env: DISPLAY_ENV,
-          });
-          return {
-            type: "text" as const,
-            text: `Scrolled ${scroll_direction} by ${scroll_amount}`,
-          };
-        }
-        case "left_click_drag": {
-          if (!start_coordinate || !coordinate)
-            throw new Error("Coordinates required for drag action");
-          const [startX, startY] = start_coordinate;
-          const [endX, endY] = coordinate;
-          await sandbox.runCommand({
-            cmd: "xdotool",
-            args: [
-              "mousemove",
-              String(startX),
-              String(startY),
-              "mousedown",
-              "1",
-              "mousemove",
-              "--sync",
-              String(endX),
-              String(endY),
-              "mouseup",
-              "1",
-            ],
-            env: DISPLAY_ENV,
-          });
-          return {
-            type: "text" as const,
-            text: `Dragged mouse from ${startX}, ${startY} to ${endX}, ${endY}`,
-          };
-        }
-        default:
-          throw new Error(`Unsupported action: ${action}`);
-      }
-    },
-    experimental_toToolResultContent(result) {
-      if (typeof result === "string") {
-        return [{ type: "text", text: result }];
-      }
-      if (result.type === "image" && result.data) {
-        return [
-          {
-            type: "image",
-            data: result.data,
-            mimeType: "image/png",
-          },
-        ];
-      }
-      if (result.type === "text" && result.text) {
-        return [{ type: "text", text: result.text }];
-      }
-      throw new Error("Invalid result format");
-    },
-  });
+type ComputerResult =
+  { type: "image"; data: string } | { type: "text"; text: string };
 
-export const bashTool = (sandboxId?: string) =>
-  anthropic.tools.bash_20250124({
-    execute: async ({ command }) => {
-      const sandbox = await getDesktop(sandboxId);
+const executeComputerAction =
+  (sandboxId: string) =>
+  async ({
+    action,
+    coordinate,
+    text,
+    duration,
+    scroll_amount,
+    scroll_direction,
+    start_coordinate,
+  }: ComputerInput): Promise<ComputerResult> => {
+    const sandbox = await getDesktop(sandboxId);
 
-      try {
-        const result = await sandbox.runCommand({
-          cmd: "bash",
-          args: ["-c", command],
+    switch (action) {
+      case "screenshot": {
+        await sandbox.runCommand({
+          cmd: "import",
+          args: ["-window", "root", "/tmp/screenshot.png"],
           env: DISPLAY_ENV,
         });
-        const stdout = await result.stdout();
-        return (
-          stdout || "(Command executed successfully with no output)"
-        );
-      } catch (error) {
-        console.error("Bash command failed:", error);
-        if (error instanceof Error) {
-          return `Error executing command: ${error.message}`;
-        } else {
-          return `Error executing command: ${String(error)}`;
-        }
+        const buffer = await sandbox.readFileToBuffer({
+          path: "/tmp/screenshot.png",
+        });
+        if (!buffer) throw new Error("Failed to read screenshot");
+        const base64Data = buffer.toString("base64");
+        return {
+          type: "image" as const,
+          data: base64Data,
+        };
       }
-    },
+      case "wait": {
+        if (!duration) throw new Error("Duration required for wait action");
+        const actualDuration = Math.min(duration, 2);
+        await wait(actualDuration);
+        return {
+          type: "text" as const,
+          text: `Waited for ${actualDuration} seconds`,
+        };
+      }
+      case "left_click": {
+        if (!coordinate)
+          throw new Error("Coordinate required for left click action");
+        const [x, y] = coordinate;
+        await sandbox.runCommand({
+          cmd: "xdotool",
+          args: ["mousemove", "--sync", String(x), String(y), "click", "1"],
+          env: DISPLAY_ENV,
+        });
+        return { type: "text" as const, text: `Left clicked at ${x}, ${y}` };
+      }
+      case "double_click": {
+        if (!coordinate)
+          throw new Error("Coordinate required for double click action");
+        const [x, y] = coordinate;
+        await sandbox.runCommand({
+          cmd: "xdotool",
+          args: [
+            "mousemove",
+            "--sync",
+            String(x),
+            String(y),
+            "click",
+            "--repeat",
+            "2",
+            "1",
+          ],
+          env: DISPLAY_ENV,
+        });
+        return {
+          type: "text" as const,
+          text: `Double clicked at ${x}, ${y}`,
+        };
+      }
+      case "right_click": {
+        if (!coordinate)
+          throw new Error("Coordinate required for right click action");
+        const [x, y] = coordinate;
+        await sandbox.runCommand({
+          cmd: "xdotool",
+          args: ["mousemove", "--sync", String(x), String(y), "click", "3"],
+          env: DISPLAY_ENV,
+        });
+        return {
+          type: "text" as const,
+          text: `Right clicked at ${x}, ${y}`,
+        };
+      }
+      case "mouse_move": {
+        if (!coordinate)
+          throw new Error("Coordinate required for mouse move action");
+        const [x, y] = coordinate;
+        await sandbox.runCommand({
+          cmd: "xdotool",
+          args: ["mousemove", "--sync", String(x), String(y)],
+          env: DISPLAY_ENV,
+        });
+        return { type: "text" as const, text: `Moved mouse to ${x}, ${y}` };
+      }
+      case "type": {
+        if (!text) throw new Error("Text required for type action");
+        await sandbox.runCommand({
+          cmd: "xdotool",
+          args: ["type", "--clearmodifiers", text],
+          env: DISPLAY_ENV,
+        });
+        return { type: "text" as const, text: `Typed: ${text}` };
+      }
+      case "key": {
+        if (!text) throw new Error("Key required for key action");
+        const mappedKey = mapKey(text);
+        await sandbox.runCommand({
+          cmd: "xdotool",
+          args: ["key", mappedKey],
+          env: DISPLAY_ENV,
+        });
+        return { type: "text" as const, text: `Pressed key: ${text}` };
+      }
+      case "scroll": {
+        if (!scroll_direction)
+          throw new Error("Scroll direction required for scroll action");
+        if (!scroll_amount)
+          throw new Error("Scroll amount required for scroll action");
+        // Button 4 = scroll up, button 5 = scroll down
+        const button = scroll_direction === "up" ? "4" : "5";
+        await sandbox.runCommand({
+          cmd: "xdotool",
+          args: ["click", "--repeat", String(scroll_amount), button],
+          env: DISPLAY_ENV,
+        });
+        return {
+          type: "text" as const,
+          text: `Scrolled ${scroll_direction} by ${scroll_amount}`,
+        };
+      }
+      case "left_click_drag": {
+        if (!start_coordinate || !coordinate)
+          throw new Error("Coordinates required for drag action");
+        const [startX, startY] = start_coordinate;
+        const [endX, endY] = coordinate;
+        await sandbox.runCommand({
+          cmd: "xdotool",
+          args: [
+            "mousemove",
+            String(startX),
+            String(startY),
+            "mousedown",
+            "1",
+            "mousemove",
+            "--sync",
+            String(endX),
+            String(endY),
+            "mouseup",
+            "1",
+          ],
+          env: DISPLAY_ENV,
+        });
+        return {
+          type: "text" as const,
+          text: `Dragged mouse from ${startX}, ${startY} to ${endX}, ${endY}`,
+        };
+      }
+      default:
+        throw new Error(`Unsupported action: ${action}`);
+    }
+  };
+
+/**
+ * Screenshots come back as base64 PNGs; everything else is plain text. Both the
+ * native and the schema-described computer tool report results the same way.
+ */
+function toToolResultContent(result: ComputerResult | string) {
+  if (typeof result === "string") {
+    return [{ type: "text" as const, text: result }];
+  }
+  if (result.type === "image" && result.data) {
+    return [
+      {
+        type: "image" as const,
+        data: result.data,
+        mimeType: "image/png",
+      },
+    ];
+  }
+  if (result.type === "text" && result.text) {
+    return [{ type: "text" as const, text: result.text }];
+  }
+  throw new Error("Invalid result format");
+}
+
+/**
+ * `native` uses Anthropic's provider-defined computer/bash tools — the model was
+ * trained on them, so they give the best accuracy. `schema` re-declares the same
+ * tools as ordinary function tools with an explicit JSON schema.
+ *
+ * The fallback exists because Anthropic-compatible relays commonly strip
+ * provider-defined tools: they carry no `input_schema`, so a proxy that
+ * normalises the tool list drops the definition and the model emits `computer`
+ * calls with an empty `{}` input. Describing the same surface as a normal
+ * function tool survives that round-trip.
+ */
+export type ComputerToolMode = "native" | "schema";
+
+export const computerToolMode: ComputerToolMode =
+  process.env.COMPUTER_TOOL_MODE === "native" ? "native" : "schema";
+
+const computerParameters = z.object({
+  action: z
+    .enum([
+      "screenshot",
+      "left_click",
+      "double_click",
+      "right_click",
+      "mouse_move",
+      "left_click_drag",
+      "type",
+      "key",
+      "scroll",
+      "wait",
+    ])
+    .describe("The action to perform on the virtual desktop."),
+  coordinate: z
+    .array(z.number().int())
+    .length(2)
+    .optional()
+    .describe(
+      "Target [x, y] in pixels. Required for left_click, double_click, " +
+        "right_click, mouse_move and left_click_drag (as the drag end point).",
+    ),
+  start_coordinate: z
+    .array(z.number().int())
+    .length(2)
+    .optional()
+    .describe("Starting [x, y] of a left_click_drag."),
+  text: z
+    .string()
+    .optional()
+    .describe(
+      "Text to type for `type`, or the key/chord for `key` " +
+        '(e.g. "Return", "ctrl+l", "alt+Tab").',
+    ),
+  scroll_direction: z
+    .enum(["up", "down", "left", "right"])
+    .optional()
+    .describe("Scroll direction. Required for `scroll`."),
+  scroll_amount: z
+    .number()
+    .int()
+    .optional()
+    .describe("Number of scroll wheel clicks. Required for `scroll`."),
+  duration: z
+    .number()
+    .optional()
+    .describe("Seconds to wait for `wait`. Capped at 2 seconds."),
+});
+
+const COMPUTER_DESCRIPTION = [
+  `Control a Linux desktop over X11. The screen is ${resolution.x}x${resolution.y} pixels;`,
+  "coordinates are in pixels with the origin (0, 0) at the TOP-LEFT corner,",
+  `x growing right up to ${resolution.x - 1} and y growing down to ${resolution.y - 1}.`,
+  "",
+  "Always call this tool with action=screenshot first, and again after any action",
+  "that changes the screen, so you can read the current state before deciding where",
+  "to click. Never guess coordinates from memory — locate the target in the most",
+  "recent screenshot and aim at the centre of the element.",
+  "",
+  "Actions:",
+  "- screenshot: capture the screen. Returns a PNG.",
+  "- left_click / right_click / double_click: click at `coordinate`.",
+  "- mouse_move: move the cursor to `coordinate` without clicking.",
+  "- left_click_drag: press at `start_coordinate`, release at `coordinate`.",
+  "- type: type `text` at the current focus. Click the target field first.",
+  "- key: press the key or chord in `text`, e.g. Return, Tab, ctrl+l, alt+F4.",
+  "- scroll: scroll `scroll_amount` clicks in `scroll_direction` under the cursor.",
+  "- wait: pause `duration` seconds while the UI settles.",
+].join("\n");
+
+export const computerTool = (sandboxId: string) => {
+  const execute = executeComputerAction(sandboxId);
+
+  if (computerToolMode === "native") {
+    return anthropicProvider.tools.computer_20250124({
+      displayWidthPx: resolution.x,
+      displayHeightPx: resolution.y,
+      displayNumber: 1,
+      execute,
+      experimental_toToolResultContent: toToolResultContent,
+    });
+  }
+
+  return tool({
+    description: COMPUTER_DESCRIPTION,
+    parameters: computerParameters,
+    execute,
+    experimental_toToolResultContent: toToolResultContent,
   });
+};
+
+const executeBash =
+  (sandboxId?: string) =>
+  async ({ command }: { command: string }) => {
+    const sandbox = await getDesktop(sandboxId);
+
+    try {
+      const result = await sandbox.runCommand({
+        cmd: "bash",
+        args: ["-c", command],
+        env: DISPLAY_ENV,
+      });
+      const stdout = await result.stdout();
+      return stdout || "(Command executed successfully with no output)";
+    } catch (error) {
+      console.error("Bash command failed:", error);
+      if (error instanceof Error) {
+        return `Error executing command: ${error.message}`;
+      } else {
+        return `Error executing command: ${String(error)}`;
+      }
+    }
+  };
+
+export const bashTool = (sandboxId?: string) => {
+  const execute = executeBash(sandboxId);
+
+  if (computerToolMode === "native") {
+    return anthropicProvider.tools.bash_20250124({ execute });
+  }
+
+  return tool({
+    description:
+      "Run a bash command inside the same Linux desktop sandbox and return its " +
+      "stdout. Prefer this over the computer tool whenever the task can be done " +
+      "from a shell (creating files, inspecting the filesystem, launching apps).",
+    parameters: z.object({
+      command: z.string().describe("The bash command to run."),
+    }),
+    execute,
+  });
+};

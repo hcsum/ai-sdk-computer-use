@@ -1,24 +1,23 @@
-<a href="https://ai-sdk-computer-use.vercel.app">
-  <h1 align="center">AI SDK Computer Use Demo</h1>
-</a>
+Author: Haochen Xu
 
-<p align="center">
-  An open-source AI chatbot demonstrating computer use capabilities with Anthropic Claude Sonnet 4.5, Vercel Sandboxes, and the AI SDK by Vercel.
-</p>
+# AI Agent Dashboard
 
-<p align="center">
-  <a href="#features"><strong>Features</strong></a> ·
-  <a href="#how-it-works"><strong>How It Works</strong></a> ·
-  <a href="#deploy-your-own"><strong>Deploy Your Own</strong></a> ·
-  <a href="#running-locally"><strong>Running Locally</strong></a>
-</p>
-<br/>
+A computer-use AI agent that drives a real Linux desktop in a Vercel Sandbox, built on
+[`vercel-labs/ai-sdk-computer-use`](https://github.com/vercel-labs/ai-sdk-computer-use).
+
+- [Features](#features)
+- [How It Works](#how-it-works)
+- [Model Access & Tool Modes](#model-access--tool-modes)
+- [Running Locally](#running-locally)
+- [Environment Variables](#environment-variables)
 
 ## Features
 
 - Streaming text responses powered by the [AI SDK](https://sdk.vercel.ai/docs).
-- Anthropic Claude Sonnet 4.5 with [computer use](https://sdk.vercel.ai/docs/guides/computer-use) and bash tool capabilities.
+- Claude with [computer use](https://sdk.vercel.ai/docs/guides/computer-use) and bash tool capabilities.
 - Remote desktop environment running in a [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) with Chrome, a window manager, and VNC streaming.
+- Provider, model and tool-declaration strategy are all configuration, so the agent runs
+  against the official Anthropic API or an Anthropic-compatible relay without code changes.
 - [shadcn/ui](https://ui.shadcn.com/) components for a modern, responsive UI powered by [Tailwind CSS](https://tailwindcss.com).
 - Built with the latest [Next.js](https://nextjs.org) App Router.
 
@@ -37,7 +36,7 @@ When a user sends a message, Claude uses the `computer` tool (screenshot, click,
 ### Architecture
 
 ```
-User ↔ Next.js Chat UI ↔ AI SDK ↔ Claude Sonnet 4.5
+User ↔ Next.js Chat UI ↔ AI SDK ↔ Claude (via lib/ai/provider.ts)
                                         ↓
                                   Vercel Sandbox
                               ┌─────────────────────┐
@@ -50,11 +49,32 @@ User ↔ Next.js Chat UI ↔ AI SDK ↔ Claude Sonnet 4.5
                               noVNC iframe in browser
 ```
 
-## Deploy Your Own
+## Model Access & Tool Modes
 
-You can deploy your own version to Vercel by clicking the button below:
+The upstream demo hardcodes `api.anthropic.com` and a specific model id, and relies on
+Anthropic's *provider-defined* `computer_20250124` / `bash_20250124` tools. Two changes
+make that portable.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?project-name=AI+SDK+Computer+Use+Demo&repository-name=ai-sdk-computer-use&repository-url=https%3A%2F%2Fgithub.com%2Fvercel-labs%2Fai-sdk-computer-use&demo-title=AI+SDK+Computer+Use+Demo&demo-url=https%3A%2F%2Fai-sdk-computer-use.vercel.app%2F&demo-description=A+chatbot+application+built+with+Next.js+demonstrating+Anthropic+Claude+Sonnet+4.5+computer+use+capabilities+with+Vercel+Sandboxes&env=ANTHROPIC_API_KEY,SANDBOX_SNAPSHOT_ID)
+**The provider is constructed, not imported.** `@ai-sdk/anthropic`'s default `anthropic`
+export resolves its base URL at module load and never reads `ANTHROPIC_BASE_URL`, so
+`lib/ai/provider.ts` builds the provider explicitly from `ANTHROPIC_API_KEY`,
+`ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL`. The base URL must include `/v1` — the SDK
+requests `${baseURL}/messages` and never appends the version segment itself.
+
+**The computer and bash tools are declared two ways**, selected by `COMPUTER_TOOL_MODE`:
+
+| Mode | Declaration | Use when |
+|---|---|---|
+| `native` | `anthropicProvider.tools.computer_20250124(…)` | Running against the official API. The model is trained on this tool, so click accuracy is best. |
+| `schema` (default) | `tool({ description, parameters: z.object(…), execute })` | Running against a relay. Provider-defined tools carry no `input_schema`; proxies that normalise the tool list drop them, and the model then emits `computer` calls with an empty `{}` input. |
+
+Both branches share one `executeComputerAction(sandboxId)` closure, so the `xdotool`
+implementation exists once and the two paths cannot drift. Under `schema` mode the tool
+description has to supply what the trained tool would have implied — the coordinate
+contract (1024x768, origin top-left) and the observe-then-act loop.
+
+The full diagnosis, including the `curl` probes that isolated the relay's behaviour, is in
+[`docs/model-access-notes.md`](docs/model-access-notes.md).
 
 ## Running Locally
 
@@ -98,10 +118,20 @@ This takes ~10 minutes. When done, it outputs a snapshot ID. Add it to your `.en
 SANDBOX_SNAPSHOT_ID=snap_xxxxxxxxxxxxx
 ```
 
-### 4. Add your Anthropic API key
+### 4. Configure model access
+
+Copy `.env.example` for the full list. At minimum:
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...
+```
+
+To run against an Anthropic-compatible relay instead, add:
+
+```
+ANTHROPIC_BASE_URL=https://your-relay.example/v1
+ANTHROPIC_MODEL=claude-sonnet-5
+COMPUTER_TOOL_MODE=schema
 ```
 
 ### 5. Start the dev server
@@ -118,6 +148,9 @@ Open [http://localhost:3000](http://localhost:3000) to use the computer use agen
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | Anthropic API key for Claude |
 | `SANDBOX_SNAPSHOT_ID` | Yes | Vercel Sandbox snapshot with the desktop environment |
+| `ANTHROPIC_BASE_URL` | No | Anthropic-compatible endpoint, **including `/v1`**. Defaults to the official API |
+| `ANTHROPIC_MODEL` | No | Model id. Defaults to `claude-sonnet-5` |
+| `COMPUTER_TOOL_MODE` | No | `schema` (default) or `native` — see [Model Access & Tool Modes](#model-access--tool-modes) |
 | `VERCEL_OIDC_TOKEN` | Yes* | Auto-set by `vercel env pull` for Sandbox auth |
 | `VERCEL_TOKEN` | Alt* | Alternative to OIDC — a Vercel personal access token |
 | `VERCEL_TEAM_ID` | Alt* | Required with `VERCEL_TOKEN` |
