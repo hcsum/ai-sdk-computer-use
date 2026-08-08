@@ -5,25 +5,26 @@ that will waste an hour if nobody writes them down. Read
 [`event-model.md`](./event-model.md) first — it is the spec this implementation
 answers to, and it was written before any of the pipeline existed.
 
-Last updated: 2026-08-08.
+Last updated: 2026-08-09.
 
 ## State
 
-Branch `feat/event-inspector`, pushed, no PR opened yet. `main` carries the
-event pipeline through PR #3.
+`main` carries everything through PR #4. Nothing in flight; the working tree is
+clean.
 
 ```text
-92a1c09  feat(dashboard): put chat on the left and link the panel to the transcript
-fa5a7ae  feat(events): record conversational turns without recording what was said
-28e6baa  fix(chat): stop the transcript fighting the reader
-18eabf3  feat(dashboard): turn the event panel into a collapsible dashboard
-8a22305  feat(dashboard): inspect an event's raw payload beside the desktop
-6e1c8e6  refactor(events): render the transcript from the projected events
+#1  feat: portable model access and a relay-safe tool layer
+#2  docs: event model spec for the agent pipeline
+#3  feat: typed agent event pipeline with a live timeline panel
+#4  feat: turn the event timeline into an inspectable dashboard
 ```
 
-Verified on the final tree: `pnpm test` (51 passed), `pnpm exec tsc --noEmit`,
+Verified on `main`: `pnpm test` (51 passed), `pnpm exec tsc --noEmit`,
 `pnpm lint`, `pnpm build`, plus a manual run against a live sandbox. The
 intermediate commits were not each built.
+
+Merges are merge commits, not squashes, deliberately: the brief says the
+incremental commits are reviewed, and squashing destroys exactly that.
 
 ## Shape of the thing
 
@@ -42,6 +43,10 @@ components/message.tsx           transcript      narrative, inline in the chat
 components/agent-event-panel.tsx debug panel     aggregates + the flat log
 components/event-inspector.tsx   inspector       one event's raw payload
 ```
+
+Colours go through the semantic tokens in `app/globals.css`; `next-themes`
+writes the class on `<html>` before paint. Nothing should reintroduce a literal
+`bg-white` or a zinc scale — those cannot reach the `.dark` palette.
 
 Three facts worth not rediscovering:
 
@@ -74,11 +79,38 @@ Three facts worth not rediscovering:
 | **Multiple sessions: create, switch, delete** | **not started** |
 | **Persist to localStorage** | **not started** |
 | Mobile-responsive (bonus) | partial — below `xl` the desktop panel is dropped and the app runs headless |
+| Light / dark / system theme | done, `components/theme-toggle.tsx` |
+| README, deployment, demo video | **not done** — see Next |
 
-## What is left, and the trap inside it
+## Next
 
-Multiple sessions and persistence are one milestone, and the day persistence
-lands it activates a failure that cannot happen today.
+In order. The first item is the only remaining hard requirement in the brief;
+the rest are deliverables, and the video cannot be recorded before sessions
+exist because it has to show a session switch.
+
+1. **Sessions** — the `Session` aggregate, a sidebar to create / switch /
+   delete, and localStorage persistence. One milestone, one PR. The trap is
+   below; read it before writing the serialiser.
+2. **README** — the Features section is still the upstream demo's. It has to
+   describe *this* app: the two-panel dashboard, the event pipeline, the
+   inspector, sessions. Add a screenshot. This is the reviewer's first stop and
+   the whole of the Documentation score, so it should read in 60 seconds, not
+   be another essay.
+3. **Deploy** to Vercel and put the URL in the README. Needs `ANTHROPIC_*`,
+   `SANDBOX_SNAPSHOT_ID` and the Vercel Sandbox credentials set as project env
+   vars — the OIDC token that works locally is not what production uses.
+4. **Demo video**, 5 minutes with sound: layout and resizing, the debug panel,
+   "What's the weather in Dubai?" end to end, a session switch, then the code
+   tour — the projection, the discriminated union, the `DesktopPanel` memo.
+5. **Invite** `lingjiekong`, `ghamry03`, `goldmermaid`, `EnergentAI` to the
+   repository.
+
+Not required and not worth starting: splitting `app/page.tsx` into containers,
+testing the memo invariant, a desktop view below `xl`.
+
+## The trap inside sessions
+
+Persistence activates a failure that cannot happen today.
 
 `event-model.md` requires that sanitising messages for storage **replaces content
 but preserves protocol structure**. Anthropic rejects any `tool_use` without a
