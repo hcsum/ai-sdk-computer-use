@@ -4,19 +4,26 @@ import { PreviewMessage } from "@/components/message";
 import { getDesktopURL } from "@/lib/sandbox/utils";
 import { useScrollToBottom } from "@/lib/use-scroll-to-bottom";
 import { useChat } from "@ai-sdk/react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { DeployButton, ProjectInfo } from "@/components/project-info";
 import { AISDKLogo } from "@/components/icons";
 import { PromptSuggestions } from "@/components/prompt-suggestions";
+import { AgentEventPanel } from "@/components/agent-event-panel";
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { ABORTED } from "@/lib/utils";
+import {
+  createToolEventProjector,
+  lifecycleOrderFor,
+  mergeAgentEvents,
+  type LifecycleEvent,
+} from "@/lib/agent-events";
 
 export default function Chat() {
   // Create separate refs for mobile and desktop to ensure both scroll properly
@@ -26,6 +33,16 @@ export default function Chat() {
   const [isInitializing, setIsInitializing] = useState(true);
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [sandboxId, setSandboxId] = useState<string | null>(null);
+  const [sessionId] = useState(
+    () => `session-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  const [lifecycleEvents, setLifecycleEvents] = useState<LifecycleEvent[]>([]);
+  const recordedSessionStartRef = useRef(false);
+  // Lifecycle events are ordered against the conversation, not the wall clock,
+  // so recording one needs the message count as of *now* — async callbacks would
+  // otherwise close over a stale `messages`.
+  const messageCountRef = useRef(0);
+  const projectToolEventsRef = useRef(createToolEventProjector());
 
   const {
     messages,
@@ -36,19 +53,29 @@ export default function Chat() {
     stop: stopGeneration,
     append,
     setMessages,
+    reload,
   } = useChat({
     api: "/api/chat",
-    id: sandboxId ?? undefined,
+    id: sessionId,
     body: {
       sandboxId,
     },
     maxSteps: 30,
     onError: (error) => {
       console.error(error);
-      toast.error("There was an error", {
-        description: "Please try again later.",
+      // The server already rendered the upstream cause into `message` — surface
+      // it, since "try again later" is wrong advice for a dead relay channel or
+      // a model id the gateway cannot route.
+      const reason = error.message?.trim() || "Please try again later.";
+      recordLifecycleEvent("chat_error", "Model request failed", sandboxId, reason);
+      toast.error("The model request failed", {
+        description: reason,
         richColors: true,
         position: "top-center",
+        duration: 10000,
+        // The user turn is still in `messages` with no answer, so replaying it
+        // is exactly what a retry means here.
+        action: { label: "Retry", onClick: () => reload() },
       });
     },
   });
@@ -82,7 +109,36 @@ export default function Chat() {
     }
   };
 
-  const isLoading = status !== "ready";
+  // Only "submitted" and "streaming" mean a turn is in flight. `!== "ready"`
+  // also catches "error", which left the composer disabled with no way back.
+  const isLoading = status === "submitted" || status === "streaming";
+  messageCountRef.current = messages.length;
+  const toolEvents = useMemo(() => projectToolEventsRef.current(messages), [messages]);
+  const agentEvents = useMemo(
+    () => mergeAgentEvents(lifecycleEvents, toolEvents),
+    [lifecycleEvents, toolEvents],
+  );
+
+  const recordLifecycleEvent = (
+    type: LifecycleEvent["type"],
+    label: string,
+    nextSandboxId?: string | null,
+    detail?: string,
+  ) => {
+    setLifecycleEvents((prev) => [
+      ...prev,
+      {
+        kind: "lifecycle",
+        id: crypto.randomUUID(),
+        order: lifecycleOrderFor(messageCountRef.current),
+        timestamp: new Date().toISOString(),
+        type,
+        label,
+        detail,
+        sandboxId: nextSandboxId,
+      },
+    ]);
+  };
 
   const refreshDesktop = async () => {
     try {
@@ -91,12 +147,29 @@ export default function Chat() {
       // console.log("Refreshed desktop connection with ID:", id);
       setStreamUrl(streamUrl);
       setSandboxId(id);
+      recordLifecycleEvent(
+        sandboxId && sandboxId === id ? "sandbox_reconnected" : "sandbox_created",
+        sandboxId && sandboxId === id ? "Desktop reconnected" : "New desktop created",
+        id,
+      );
     } catch (err) {
       console.error("Failed to refresh desktop:", err);
+      recordLifecycleEvent(
+        "sandbox_error",
+        "Desktop refresh failed",
+        sandboxId,
+        err instanceof Error ? err.message : String(err),
+      );
     } finally {
       setIsInitializing(false);
     }
   };
+
+  useEffect(() => {
+    if (recordedSessionStartRef.current) return;
+    recordedSessionStartRef.current = true;
+    recordLifecycleEvent("session_created", "Session created", null);
+  }, []);
 
   // Kill desktop on page close
   useEffect(() => {
@@ -110,6 +183,9 @@ export default function Chat() {
       navigator.sendBeacon(
         `/api/kill-desktop?sandboxId=${encodeURIComponent(sandboxId)}`,
       );
+      // Fires on unload, so this rarely gets to paint — it exists so a session
+      // that survives (bfcache restore) still shows why the desktop went away.
+      recordLifecycleEvent("sandbox_killed", "Desktop killed", sandboxId);
     };
 
     // Detect iOS / Safari
@@ -151,8 +227,15 @@ export default function Chat() {
 
         setStreamUrl(streamUrl);
         setSandboxId(id);
+        recordLifecycleEvent("sandbox_created", "Desktop created", id);
       } catch (err) {
         console.error("Failed to initialize desktop:", err);
+        recordLifecycleEvent(
+          "sandbox_error",
+          "Desktop initialization failed",
+          sandboxId,
+          err instanceof Error ? err.message : String(err),
+        );
         toast.error("Failed to initialize desktop");
       } finally {
         setIsInitializing(false);
@@ -238,6 +321,8 @@ export default function Chat() {
               <div ref={desktopEndRef} className="pb-2" />
             </div>
 
+            <AgentEventPanel events={agentEvents} sandboxId={sandboxId} />
+
             {messages.length === 0 && (
               <PromptSuggestions
                 disabled={isInitializing}
@@ -285,6 +370,8 @@ export default function Chat() {
           ))}
           <div ref={mobileEndRef} className="pb-2" />
         </div>
+
+        <AgentEventPanel events={agentEvents} sandboxId={sandboxId} />
 
         {messages.length === 0 && (
           <PromptSuggestions

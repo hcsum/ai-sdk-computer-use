@@ -21,6 +21,27 @@ import {
   StopCircle,
 } from "lucide-react";
 
+type ComputerToolResult =
+  | {
+      ok: true;
+      data: { type: "image"; data: string } | { type: "text"; text: string };
+      durationMs?: number;
+    }
+  | { ok: false; error: string; durationMs?: number };
+
+const getComputerResult = (result: unknown): ComputerToolResult | null => {
+  if (!result || typeof result !== "object") return null;
+  const candidate = result as ComputerToolResult;
+  if (typeof candidate.ok !== "boolean") return null;
+  return candidate;
+};
+
+const getToolResultStatus = (result: unknown) => {
+  if (!result || typeof result !== "object") return "complete";
+  const candidate = result as { ok?: unknown };
+  return candidate.ok === false ? "error" : "complete";
+};
+
 const PurePreviewMessage = ({
   message,
   isLatestMessage,
@@ -190,23 +211,30 @@ const PurePreviewMessage = ({
                                 />                              ) : (
                                 <CheckCircle
                                   size={14}
-                                  className="text-green-600"
+                                  className={cn(
+                                    getToolResultStatus(part.toolInvocation.result) === "error"
+                                      ? "text-red-600"
+                                      : "text-green-600",
+                                  )}
                                 />
                               )
                             ) : null}
                           </div>
                         </div>
                         {state === "result" ? (
-                          part.toolInvocation.result.type === "image" && (
+                          (() => {
+                            const result = getComputerResult(part.toolInvocation.result);
+                            return result?.ok && result.data.type === "image" ? (
                             <div className="p-2">
                               {/* eslint-disable-next-line @next/next/no-img-element */}
                               <img
-                                src={`data:image/png;base64,${part.toolInvocation.result.data}`}
+                                src={`data:image/png;base64,${result.data.data}`}
                                 alt="Generated Image"
                                 className="w-full aspect-[1024/768] rounded-sm"
                               />
                             </div>
-                          )
+                            ) : null;
+                          })()
                         ) : action === "screenshot" ? (
                           <div className="w-full aspect-[1024/768] rounded-sm bg-zinc-200 dark:bg-zinc-800 animate-pulse"></div>
                         ) : null}
@@ -242,7 +270,14 @@ const PurePreviewMessage = ({
                               <StopCircle className="h-4 w-4 text-red-500" />
                             )
                           ) : state === "result" ? (
-                            <CheckCircle size={14} className="text-green-600" />
+                            <CheckCircle
+                              size={14}
+                              className={cn(
+                                getToolResultStatus(part.toolInvocation.result) === "error"
+                                  ? "text-red-600"
+                                  : "text-green-600",
+                              )}
+                            />
                           ) : null}
                         </div>
                       </motion.div>
