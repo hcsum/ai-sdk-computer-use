@@ -349,6 +349,8 @@ export default function Chat() {
             <AgentEventPanel
               events={agentEvents}
               sandboxId={sandboxId}
+              sessionId={sessionId}
+              chatStatus={status}
               selectedEventId={selectedEventId}
               onSelectEvent={setSelectedEventId}
             />
@@ -422,6 +424,8 @@ export default function Chat() {
         <AgentEventPanel
           events={agentEvents}
           sandboxId={sandboxId}
+          sessionId={sessionId}
+          chatStatus={status}
           selectedEventId={selectedEventId}
           onSelectEvent={setSelectedEventId}
         />
