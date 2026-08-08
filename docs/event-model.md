@@ -21,7 +21,12 @@ the agent status indicator and the timeline.
 
 **`lifecycleEvents`** covers app/runtime facts the AI SDK never records:
 `session_created`, `sandbox_created`, `sandbox_reconnected`, `sandbox_killed`,
-`sandbox_error`.
+`sandbox_error`, `chat_error`.
+
+`chat_error` is the one that is not about the sandbox: a request that never
+reached a tool call — a routing failure at the relay, an unroutable model id — 
+produces no message and no tool event, so without it a failed turn leaves no
+trace anywhere in the UI. It carries the cause in `detail`.
 
 The dividing question: **does this data need to participate verbatim in the next
 LLM turn?** If yes it belongs in `messages`; if it only exists to be observed,
