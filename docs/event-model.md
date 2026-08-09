@@ -185,6 +185,14 @@ result: { type: "image", data: <base64> }
 
 `toolCallId`, the part and the `result` field all survive.
 
+**Every tool call is stored twice.** `useChat` populates both `message.parts` and
+the legacy top-level `message.toolInvocations`, and the two hold the same `result`
+object. Sanitising one and not the other looks correct in the inspector and still
+writes full-size screenshots to disk — that shipped, and a four-message session
+reached 1.3 MB with 99.6% of it in `toolInvocations`. The regression test asserts
+against the *serialised* session (`not.toContain('"type":"image"')`) rather than
+against either field, so a third copy would fail it too.
+
 ### Two prunings, doing different jobs
 
 | Pruning | Where | Purpose | Effect |

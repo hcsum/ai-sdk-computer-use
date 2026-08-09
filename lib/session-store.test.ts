@@ -149,6 +149,60 @@ describe("sanitiseMessagesForStorage", () => {
     expect(invocationOf(sanitised, 1).result).toEqual({ ok: true, stdout: "a\nb" });
     expect(JSON.stringify(original)).toBe(snapshot);
   });
+
+  /**
+   * `useChat` writes every tool call twice — into `parts` and into the legacy
+   * top-level `toolInvocations`. Sanitising only `parts` left a second, full-size
+   * copy of every screenshot on disk; one four-message session reached 1.3 MB.
+   */
+  it("redacts the legacy top-level toolInvocations, not just parts", () => {
+    const invocation = {
+      toolCallId: "call-1",
+      toolName: "computer",
+      state: "result",
+      args: { action: "screenshot" },
+      result: screenshotResult,
+    };
+
+    const sanitised = sanitiseMessagesForStorage([
+      message([toolPart(invocation)], {
+        toolInvocations: [invocation] as unknown as Message["toolInvocations"],
+      }),
+    ]);
+
+    const persisted = sanitised[0].toolInvocations![0] as { result: unknown };
+    expect(persisted.result).toEqual({
+      ok: true,
+      durationMs: 210,
+      startedAt: "2026-08-09T00:00:00.000Z",
+      data: { type: "text", text: REDACTED_PERSISTED_TEXT },
+    });
+  });
+
+  /**
+   * The invariant, stated once against the serialised form: whatever shape the
+   * SDK invents next, no image payload may reach storage.
+   */
+  it("leaves no image payload anywhere in the serialised session", () => {
+    const invocation = {
+      toolCallId: "call-1",
+      toolName: "computer",
+      state: "result",
+      args: { action: "screenshot" },
+      result: screenshotResult,
+    };
+
+    const serialised = JSON.stringify(
+      sanitiseMessagesForStorage([
+        message([toolPart(invocation)], {
+          toolInvocations: [invocation] as unknown as Message["toolInvocations"],
+        }),
+      ]),
+    );
+
+    expect(serialised).not.toContain('"type":"image"');
+    expect(serialised).not.toContain("iVBORw0KGgo=");
+  });
 });
 
 describe("deriveSessionTitle", () => {

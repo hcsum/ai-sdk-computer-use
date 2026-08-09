@@ -73,15 +73,17 @@ export const deriveSessionTitle = (messages: Message[]) => {
     : text;
 };
 
+type ToolInvocation = {
+  toolCallId: string;
+  toolName: string;
+  state: string;
+  args?: unknown;
+  result?: unknown;
+};
+
 type ToolInvocationPart = {
   type: "tool-invocation";
-  toolInvocation: {
-    toolCallId: string;
-    toolName: string;
-    state: string;
-    args?: unknown;
-    result?: unknown;
-  };
+  toolInvocation: ToolInvocation;
 };
 
 const isToolInvocationPart = (part: unknown): part is ToolInvocationPart => {
@@ -116,35 +118,52 @@ const carriesImage = (result: unknown) => {
  *
  * Pure: `messages` is live React state, so nothing here may mutate it.
  */
+const sanitiseInvocation = (invocation: ToolInvocation): ToolInvocation => {
+  if (invocation.state !== "result") {
+    return { ...invocation, state: "result", result: ABORTED };
+  }
+
+  if (!carriesImage(invocation.result)) return invocation;
+
+  return {
+    ...invocation,
+    result: {
+      ...(invocation.result as Record<string, unknown>),
+      ok: true,
+      data: { type: "text", text: REDACTED_PERSISTED_TEXT },
+    },
+  };
+};
+
+/**
+ * An assistant message carries its tool calls *twice*: in `parts`, and in the
+ * legacy top-level `toolInvocations` array that `useChat` still populates. Both
+ * hold the same `result` object, so sanitising only `parts` leaves a second,
+ * untouched copy of every screenshot — which is how a four-message session
+ * reached 1.3 MB. Both have to go through the same replacement.
+ */
 export const sanitiseMessagesForStorage = (messages: Message[]): Message[] =>
-  messages.map((message) => ({
-    ...message,
-    parts: message.parts?.map((part) => {
-      if (!isToolInvocationPart(part)) return part;
-      const { toolInvocation } = part;
+  messages.map((message) => {
+    const sanitised: Message = {
+      ...message,
+      parts: message.parts?.map((part) =>
+        isToolInvocationPart(part)
+          ? { ...part, toolInvocation: sanitiseInvocation(part.toolInvocation) }
+          : part,
+      ),
+    } as Message;
 
-      if (toolInvocation.state !== "result") {
-        return {
-          ...part,
-          toolInvocation: { ...toolInvocation, state: "result", result: ABORTED },
-        };
-      }
+    if (message.toolInvocations) {
+      sanitised.toolInvocations = message.toolInvocations.map(
+        (invocation) =>
+          sanitiseInvocation(
+            invocation as unknown as ToolInvocation,
+          ) as unknown as NonNullable<Message["toolInvocations"]>[number],
+      );
+    }
 
-      if (!carriesImage(toolInvocation.result)) return part;
-
-      return {
-        ...part,
-        toolInvocation: {
-          ...toolInvocation,
-          result: {
-            ...(toolInvocation.result as Record<string, unknown>),
-            ok: true,
-            data: { type: "text", text: REDACTED_PERSISTED_TEXT },
-          },
-        },
-      };
-    }),
-  })) as Message[];
+    return sanitised;
+  });
 
 const parse = <T,>(raw: string | null): T | null => {
   if (!raw) return null;
