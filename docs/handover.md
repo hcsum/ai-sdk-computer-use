@@ -9,20 +9,26 @@ Last updated: 2026-08-09.
 
 ## State
 
-`main` carries everything through PR #4. Sessions are on `feat/sessions`.
+`main` carries everything through PR #4. Sessions are on `feat/sessions`, four
+commits, **not yet merged and not yet pushed** — opening that PR is the first
+thing to do.
 
 ```text
 #1  feat: portable model access and a relay-safe tool layer
 #2  docs: event model spec for the agent pipeline
 #3  feat: typed agent event pipeline with a live timeline panel
 #4  feat: turn the event timeline into an inspectable dashboard
-    feat: multiple sessions, persisted to localStorage   ← feat/sessions
+    feat/sessions ─ storage layer → useSessions → the rail → these docs
 ```
 
 Verified on `feat/sessions`: `pnpm test` (64 passed), `pnpm exec tsc --noEmit`,
-`pnpm lint`, `pnpm build`. **Not yet driven against a live sandbox** — the
-session paths that most want a real run are switching mid-stream and returning
-to a session whose sandbox has expired.
+`pnpm lint`, `pnpm build`, plus a manual run against a live sandbox.
+
+One gap in that manual run, worth closing before the video: nobody has yet
+driven a switch *mid-stream*, or returned to a session whose sandbox had already
+expired. Both paths are implemented and both are the kind that fail quietly —
+the first can only misplace a tool result, the second is where a 400 from a
+badly sanitised transcript would surface.
 
 Merges are merge commits, not squashes, deliberately: the brief says the
 incremental commits are reviewed, and squashing destroys exactly that.
