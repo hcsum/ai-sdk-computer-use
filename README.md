@@ -82,7 +82,7 @@ See `docs/event-model.md`.
 
 **VNC outside chat churn.** The VNC iframe is isolated from chat and event state so streamed tokens do not remount or reload the desktop connection. `DesktopPanel` receives only stable desktop props, is memoized, and is mounted once per responsive layout to avoid duplicate VNC clients.
 
-**Relay-compatible tool mode.** `COMPUTER_TOOL_MODE=schema` re-declares computer and bash as schema tools for Anthropic-compatible relays; `native` keeps Anthropic's provider-defined tools for the official API. See `docs/model-access-notes.md`.
+**Relay-compatible tool mode.** Anthropic's native computer/bash tools are provider-defined and do not carry an `input_schema`. Some Anthropic-compatible relays drop those tool definitions, which made the model emit `computer` calls with empty input. `COMPUTER_TOOL_MODE=schema` re-declares the same surface as normal schema tools for relays; `native` keeps the trained provider-defined tools for the official API. See `docs/model-access-notes.md`.
 
 ## Validation
 
