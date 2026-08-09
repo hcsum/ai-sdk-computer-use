@@ -5,7 +5,17 @@ import { ChevronDown, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /** How much of the viewport an open section takes. */
-const OPEN_HEIGHT = "h-[45dvh]";
+const OPEN_HEIGHT = "h-[52dvh]";
+
+/**
+ * An open section floats over the chat rather than continuing it, and a tint
+ * alone does not say so: `--muted` sits 3% off `--background` in light mode, so
+ * the seam between the log and the last message all but disappears. The cast
+ * shadow is what carries the separation — it reads as a layer edge at any
+ * contrast — with the tint and border reinforcing it.
+ */
+const OPEN_SURFACE =
+  "bg-muted shadow-[0_-10px_30px_-12px_rgb(0_0_0/0.18)] dark:shadow-[0_-10px_30px_-8px_rgb(0_0_0/0.6)]";
 
 type DockBarProps = {
   icon: LucideIcon;
@@ -69,17 +79,33 @@ export function DockSection({
   return (
     <aside
       className={cn(
-        "flex shrink-0 flex-col overflow-hidden border-t border-border bg-muted/40",
+        // `relative z-10` so the cast shadow lands on the transcript above
+        // rather than being painted under it.
+        "relative z-10 flex shrink-0 flex-col overflow-hidden border-t border-border bg-muted/40",
         // Fixed rather than capped, so a section occupies the same space no
         // matter what is inside it — a height that tracks its contents moves
         // the composer under the user's cursor.
-        isOpen && OPEN_HEIGHT,
+        isOpen && [OPEN_HEIGHT, OPEN_SURFACE],
       )}
     >
       <DockBar {...bar}>{barContent}</DockBar>
       {isOpen || keepMounted ? (
         <div
-          className={cn("min-h-0", isOpen ? "flex-1" : "h-0", bodyClassName)}
+          className={cn(
+            "min-h-0 overflow-hidden",
+            // A collapsed `keepMounted` body is a zero-height box whose contents
+            // still have layout: the desktop's "New desktop" button is absolute
+            // and sits 44px below the box, and the VNC iframe is a cross-process
+            // compositing layer. Height alone leaves both of those to the
+            // ancestor's clip, and a live iframe's layer does not always get
+            // re-clipped when only the container's height changes — which is the
+            // stream bleeding over the bar below it until something forces a
+            // repaint. `invisible` takes it out of painting altogether, and
+            // unlike unmounting or `display: none` it does not drop the
+            // connection.
+            isOpen ? "flex-1" : "h-0 invisible pointer-events-none",
+            bodyClassName,
+          )}
           aria-hidden={!isOpen}
         >
           {children}
