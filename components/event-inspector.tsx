@@ -94,9 +94,10 @@ export function EventInspector({ event, payload }: EventInspectorProps) {
         <Row label={event.kind === "tool" ? "Tool call id" : "Event id"} value={event.id} />
         {event.kind === "tool" ? <Row label="Message" value={event.messageId} /> : null}
         {event.kind === "turn" ? <Row label="Role" value={event.role} /> : null}
-        {/* The sort key. It is the first thing to look at when the timeline
-            comes out in an order that seems wrong. */}
-        <Row label="Order" value={String(event.order)} />
+        {/* `event.order` is deliberately not shown. It is an encoded sort key
+            (see ORDER_BLOCK in lib/agent-events.ts), so the values that reach
+            the UI — -1, 1999, 3013 — read as corruption to anyone who does not
+            know the encoding. Debug it from the projector, not from here. */}
         {event.kind === "tool" ? (
           <>
             {formatTime(event.startedAt) ? (

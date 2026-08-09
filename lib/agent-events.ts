@@ -11,14 +11,48 @@ import { ABORTED } from "./utils";
  */
 export type ToolEventStatus = "pending" | "complete" | "aborted" | "error";
 
+/**
+ * Slots per message in the ordering space. Message `n` owns
+ * `[n * ORDER_BLOCK, n * ORDER_BLOCK + ORDER_BLOCK - 1]`:
+ *
+ * ```text
+ *   n*B - 1   lifecycle events observed before this message
+ *   n*B       the message's own turn marker
+ *   n*B + 1   first tool call
+ *   …
+ * ```
+ *
+ * The block is finite, so a message with `ORDER_BLOCK - 1` or more tool parts
+ * would spill into the next message's block — and slot `ORDER_BLOCK - 1` is
+ * where the *next* message's preceding lifecycle events sit, so the collision
+ * starts one slot before the overflow. Reaching it needs ~999 tool calls in a
+ * single assistant message, which the step limit makes unreachable today.
+ *
+ * Overflow clamps rather than throws. These projectors run during render, and a
+ * throw there blanks the whole timeline — strictly worse than the local
+ * misordering it would be reporting. The warning is the signal to widen the
+ * block.
+ */
+const ORDER_BLOCK = 1000;
+
+const orderWithinBlock = (messageIndex: number, slot: number) => {
+  if (slot >= ORDER_BLOCK - 1) {
+    console.warn(
+      `Message ${messageIndex} exceeded its ordering block (slot ${slot} of ${ORDER_BLOCK}); timeline order is approximate here`,
+    );
+    return messageIndex * ORDER_BLOCK + ORDER_BLOCK - 2;
+  }
+  return messageIndex * ORDER_BLOCK + slot;
+};
+
 type ToolEventCommon = {
   kind: "tool";
   id: string;
   messageId: string;
   /**
    * Sort key, in the client's observation order. Each message owns a block of
-   * 1000 slots; slot 0 is reserved for the message's own turn marker, so a tool
-   * call sits at `messageIndex * 1000 + partIndex + 1`.
+   * `ORDER_BLOCK` slots; slot 0 is the message's own turn marker, so a tool
+   * call sits at `messageIndex * ORDER_BLOCK + partIndex + 1`.
    *
    * Never sort the timeline on timestamps: tool timing comes from the server and
    * lifecycle timing from the browser, and those two clocks need not agree.
@@ -242,7 +276,7 @@ export const createToolEventProjector = (now = () => new Date().toISOString()) =
           kind: "tool",
           id: toolCallId,
           messageId: message.id,
-          order: messageIndex * 1000 + partIndex + 1,
+          order: orderWithinBlock(messageIndex, partIndex + 1),
           timestamp: meta.startedAt ?? provisionalStart,
           status: isResult ? settledStatus(result) : "pending",
           ...meta,
@@ -303,7 +337,7 @@ export const createTurnEventProjector = (now = () => new Date().toISOString()) =
         id: message.id,
         messageId: message.id,
         // Slot 0 of the message's block: ahead of every tool call it made.
-        order: messageIndex * 1000,
+        order: orderWithinBlock(messageIndex, 0),
         timestamp: message.createdAt?.toISOString() ?? provisional,
         role: message.role,
       });
@@ -333,4 +367,5 @@ export const mergeAgentEvents = (
  * belonging to the messages that already exist, and before the next message's
  * turn marker, which opens that message's block at slot 0.
  */
-export const lifecycleOrderFor = (messageCount: number) => messageCount * 1000 - 1;
+export const lifecycleOrderFor = (messageCount: number) =>
+  messageCount * ORDER_BLOCK - 1;
