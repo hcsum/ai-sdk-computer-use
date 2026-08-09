@@ -26,9 +26,16 @@ import {
   mergeAgentEvents,
   type LifecycleEvent,
 } from "@/lib/agent-events";
+import { DesktopDock } from "@/components/desktop-dock";
+import { DockSection } from "@/components/dock-section";
 import { SessionSidebar } from "@/components/session-sidebar";
+import { describeEvent } from "@/lib/tool-event-display";
+import { useMediaQuery } from "@/lib/use-media-query";
 import { useSessions, type LiveSessionState } from "@/lib/use-sessions";
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, SquareDashedMousePointer } from "lucide-react";
+
+/** The docked sections below `xl`, of which exactly one may be open. */
+type DockName = "desktop" | "events" | "inspector";
 
 const ChatHeader = ({ onToggleSessions }: { onToggleSessions?: () => void }) => (
   <div className="flex items-center justify-between border-b border-border bg-background px-4 py-3">
@@ -91,6 +98,11 @@ export default function Chat() {
   // a drawer below `xl`, where there is no width to give it.
   const [isSessionRailCollapsed, setIsSessionRailCollapsed] = useState(false);
   const [isSessionListOpen, setIsSessionListOpen] = useState(false);
+  // Below `xl` the desktop, the event log and the inspector are peers sharing
+  // the bottom of the chat column, and at most one is open — there is not
+  // enough height for two. Above `xl` each has its own space and none of this
+  // applies: the event panel goes back to owning its own state.
+  const [openDock, setOpenDock] = useState<DockName | null>(null);
   // Lifecycle events are ordered against the conversation, not the wall clock,
   // so recording one needs the message count as of *now* — async callbacks would
   // otherwise close over a stale `messages`.
@@ -107,6 +119,10 @@ export default function Chat() {
     lifecycleEvents: [],
     sandboxId: null,
   });
+  // Read in JS, not CSS: `DesktopPanel` must exist exactly once, and a second
+  // copy hidden behind `xl:hidden` is a second VNC client on the same desktop.
+  const isWide = useMediaQuery("(min-width: 1280px)");
+
   const {
     sessions,
     activeSessionId,
@@ -419,6 +435,22 @@ export default function Chat() {
     [activeSessionId, isLoading, selectSession],
   );
 
+  /**
+   * Below `xl` a selection has somewhere to go: the inspector is its own docked
+   * section, so opening it is what "select" means there. Deselecting leaves the
+   * section open on its empty state rather than collapsing the strip under the
+   * user's finger.
+   */
+  const handleSelectEventInDock = useCallback((eventId: string | null) => {
+    setSelectedEventId(eventId);
+    if (eventId) setOpenDock("inspector");
+  }, []);
+
+  const toggleDock = useCallback(
+    (dock: DockName) => setOpenDock((open) => (open === dock ? null : dock)),
+    [],
+  );
+
   const handleCreateSession = useCallback(() => {
     if (isLoading) stop();
     setIsSessionListOpen(false);
@@ -439,11 +471,6 @@ export default function Chat() {
 
   return (
     <div className="flex h-dvh relative">
-      {/* Mobile/tablet banner */}
-      <div className="flex items-center justify-center fixed left-1/2 -translate-x-1/2 top-5 shadow-md text-xs mx-auto rounded-lg h-8 w-fit bg-blue-600 text-white px-3 py-2 text-left z-50 xl:hidden">
-        <span>Headless mode</span>
-      </div>
-
       {/* Resizable Panels */}
       <div className="hidden min-w-0 flex-1 xl:block">
         <ResizablePanelGroup direction="horizontal" className="h-full">
@@ -531,11 +558,13 @@ export default function Chat() {
                 minSize={30}
                 className="bg-black relative items-center justify-center"
               >
-                <DesktopPanel
-                  streamUrl={streamUrl}
-                  isInitializing={isInitializing}
-                  onRefresh={refreshDesktop}
-                />
+                {isWide ? (
+                  <DesktopPanel
+                    streamUrl={streamUrl}
+                    isInitializing={isInitializing}
+                    onRefresh={refreshDesktop}
+                  />
+                ) : null}
               </ResizablePanel>
 
               <ResizableHandle withHandle />
@@ -554,7 +583,8 @@ export default function Chat() {
         </ResizablePanelGroup>
       </div>
 
-      {/* Mobile View (Chat Only) */}
+      {/* Below `xl`: one column, with the desktop and the event log docked
+          under it as mutually exclusive sections. */}
       <div className="w-full xl:hidden flex flex-col bg-background">
         <ChatHeader onToggleSessions={() => setIsSessionListOpen((open) => !open)} />
 
@@ -590,25 +620,25 @@ export default function Chat() {
               isLatestMessage={i === messages.length - 1}
               toolEvents={toolEventsById}
               selectedEventId={selectedEventId}
-              onSelectEvent={setSelectedEventId}
+              onSelectEvent={handleSelectEventInDock}
             />
           ))}
           <div ref={mobileEndRef} className="pb-2" />
         </div>
 
-        {/* No desktop panel to dock under here, so the inspector takes over the
-            space above the event panel while something is selected. */}
-        {selectedEvent ? (
-          <div className="relative max-h-[45dvh] overflow-y-auto border-t border-border">
-            <button
-              type="button"
-              onClick={() => setSelectedEventId(null)}
-              className="absolute right-3 top-3 z-10 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground"
-            >
-              Close
-            </button>
-            <EventInspector event={selectedEvent} payload={selectedPayload} />
-          </div>
+        {!isWide ? (
+          <DesktopDock
+            isOpen={openDock === "desktop"}
+            onToggle={() => toggleDock("desktop")}
+            isInitializing={isInitializing}
+            isConnected={Boolean(streamUrl)}
+          >
+            <DesktopPanel
+              streamUrl={streamUrl}
+              isInitializing={isInitializing}
+              onRefresh={refreshDesktop}
+            />
+          </DesktopDock>
         ) : null}
 
         <AgentEventPanel
@@ -617,8 +647,25 @@ export default function Chat() {
           sessionId={activeSessionId ?? ""}
           chatStatus={status}
           selectedEventId={selectedEventId}
-          onSelectEvent={selectAndRevealEvent}
+          onSelectEvent={handleSelectEventInDock}
+          isOpen={openDock === "events"}
+          onToggle={() => toggleDock("events")}
         />
+
+        <DockSection
+          icon={SquareDashedMousePointer}
+          title="Event details"
+          isOpen={openDock === "inspector"}
+          onToggle={() => toggleDock("inspector")}
+          bodyClassName="overflow-y-auto"
+          barContent={
+            <span className="ml-auto truncate pr-2 text-[11px] text-muted-foreground">
+              {selectedEvent ? describeEvent(selectedEvent).label : "nothing selected"}
+            </span>
+          }
+        >
+          <EventInspector event={selectedEvent} payload={selectedPayload} />
+        </DockSection>
 
         <div className="bg-background">
           <form onSubmit={handleSubmit} className="p-4">

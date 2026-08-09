@@ -11,7 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import type { ToolEvent, TurnEvent } from "./agent-events";
+import type { AgentEvent, ToolEvent, TurnEvent } from "./agent-events";
 
 /**
  * The one place a `ToolEvent` turns into words and an icon. The chat transcript
@@ -128,6 +128,22 @@ export const describeTurnEvent = (event: TurnEvent) =>
   event.role === "user"
     ? { label: "You", detail: "user_turn" }
     : { label: "Agent", detail: "assistant_turn" };
+
+/**
+ * Any event, in the one line a collapsed bar or a log row has room for.
+ * Lifecycle events already carry their own label; the other two kinds are
+ * derived, so this is the single place that knows how to name all three.
+ */
+export const describeEvent = (event: AgentEvent): { label: string; detail: string } => {
+  switch (event.kind) {
+    case "tool":
+      return describeToolEvent(event);
+    case "turn":
+      return describeTurnEvent(event);
+    default:
+      return { label: event.label, detail: event.type };
+  }
+};
 
 export const formatDuration = (durationMs?: number) => {
   if (durationMs === undefined) return null;

@@ -15,16 +15,15 @@ import {
   type EventFilter,
 } from "@/lib/agent-event-stats";
 import {
-  describeToolEvent,
-  describeTurnEvent,
+  describeEvent,
   formatDuration,
 } from "@/lib/tool-event-display";
 import { cn } from "@/lib/utils";
+import { DockSection } from "@/components/dock-section";
 import {
   Activity,
   Bot,
   CheckCircle2,
-  ChevronDown,
   CircleAlert,
   CircleSlash,
   Clock3,
@@ -39,6 +38,14 @@ type AgentEventPanelProps = {
   chatStatus: ChatStatus;
   selectedEventId: string | null;
   onSelectEvent: (eventId: string | null) => void;
+  /**
+   * Controlled expansion, for the layouts where this panel shares its space
+   * with another one and only one of them may be open. Omit both and the panel
+   * owns its own state, which is what the `xl` layout wants — there the desktop
+   * has its own column and nothing competes with the log.
+   */
+  isOpen?: boolean;
+  onToggle?: () => void;
 };
 
 const STATUS_STYLES = {
@@ -57,17 +64,6 @@ const getStatusIcon = (event: AgentEvent) => {
   return CheckCircle2;
 };
 
-const describeEvent = (event: AgentEvent) => {
-  switch (event.kind) {
-    case "tool":
-      return describeToolEvent(event);
-    case "turn":
-      return describeTurnEvent(event);
-    default:
-      return { label: event.label, detail: event.type };
-  }
-};
-
 const Stat = ({ label, value }: { label: string; value: string }) => (
   <div className="rounded-md border border-border bg-background px-2 py-1.5">
     <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
@@ -82,10 +78,14 @@ export function AgentEventPanel({
   chatStatus,
   selectedEventId,
   onSelectEvent,
+  isOpen: controlledIsOpen,
+  onToggle,
 }: AgentEventPanelProps) {
   // Collapsed by default: the transcript is the primary surface, and this is
   // instrumentation you open when you want it.
-  const [isOpen, setIsOpen] = useState(false);
+  const [uncontrolledIsOpen, setUncontrolledIsOpen] = useState(false);
+  const isOpen = controlledIsOpen ?? uncontrolledIsOpen;
+  const toggle = onToggle ?? (() => setUncontrolledIsOpen((open) => !open));
   const [filter, setFilter] = useState<EventFilter>("all");
 
   const status = deriveAgentStatus(events, chatStatus);
@@ -95,44 +95,29 @@ export function AgentEventPanel({
   const statusStyle = STATUS_STYLES[status];
 
   return (
-    <aside
-      className={cn(
-        "flex shrink-0 flex-col overflow-hidden border-t border-border bg-muted/40",
-        // Fixed rather than capped, so the panel occupies the same space no
-        // matter how many events pass the filter — a height that tracks its
-        // contents moves the composer under the user's cursor. It also stops
-        // the pinned head being squeezed out when the log is long.
-        isOpen && "h-[45dvh]",
-      )}
+    <DockSection
+      icon={Activity}
+      title="Agent events"
+      isOpen={isOpen}
+      onToggle={toggle}
+      bodyClassName="flex flex-col"
+      barContent={
+        <>
+          <span className={cn("size-1.5 shrink-0 rounded-full", statusStyle.dot)} />
+          <span className={cn("text-xs font-medium", statusStyle.text)}>
+            {statusStyle.label}
+          </span>
+          <span className="ml-auto truncate pr-2 text-[11px] text-muted-foreground">
+            {summary.toolCalls} calls · {summary.pending} pending
+            {summary.failed > 0 ? (
+              <span className="text-red-600 dark:text-red-400"> · {summary.failed} failed</span>
+            ) : null}
+          </span>
+        </>
+      }
     >
-      <button
-        type="button"
-        onClick={() => setIsOpen((open) => !open)}
-        aria-expanded={isOpen}
-        className="flex shrink-0 items-center gap-2 px-4 py-2.5 text-left"
-      >
-        <Activity className="size-4 shrink-0 text-muted-foreground" />
-        <span className="text-sm font-semibold text-foreground">Agent events</span>
-        <span className={cn("size-1.5 shrink-0 rounded-full", statusStyle.dot)} />
-        <span className={cn("text-xs font-medium", statusStyle.text)}>
-          {statusStyle.label}
-        </span>
-        <span className="ml-auto truncate text-[11px] text-muted-foreground">
-          {summary.toolCalls} calls · {summary.pending} pending
-          {summary.failed > 0 ? (
-            <span className="text-red-600 dark:text-red-400"> · {summary.failed} failed</span>
-          ) : null}
-        </span>
-        <ChevronDown
-          className={cn(
-            "size-4 shrink-0 text-muted-foreground transition-transform",
-            !isOpen && "rotate-180",
-          )}
-        />
-      </button>
-
       {isOpen ? (
-        <div className="flex min-h-0 flex-1 flex-col">
+        <>
           {/* Identity, aggregates and the filter row stay put: they are what you
               read the log *against*, and they are useless once scrolled away. */}
           <div className="shrink-0 px-4">
@@ -269,8 +254,8 @@ export function AgentEventPanel({
               })
             )}
           </div>
-        </div>
+        </>
       ) : null}
-    </aside>
+    </DockSection>
   );
 }
