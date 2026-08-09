@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { Message } from "ai";
+import { toast } from "sonner";
 
 import type { LifecycleEvent } from "./agent-events";
 import {
@@ -123,7 +124,7 @@ export const useSessions = (
     const { messages, lifecycleEvents, sandboxId } = liveRef.current;
 
     const index = sessionsRef.current;
-    const { evicted } = writeSessionBody(
+    const { ok, evicted } = writeSessionBody(
       storage,
       sessionId,
       { messages, lifecycleEvents, sandboxId },
@@ -136,8 +137,33 @@ export const useSessions = (
         ? { ...meta, title, updatedAt: new Date().toISOString() }
         : meta,
     );
+    /**
+     * Both of these used to be a `console.warn` the user never saw, and both
+     * lose their work silently: an evicted session still lists in the sidebar
+     * and opens empty, and a failed write means this conversation is gone on
+     * reload. Storage running out is not a detail to keep to ourselves.
+     *
+     * `flush` runs on every message, so the toasts are given stable ids —
+     * sonner replaces rather than stacks them.
+     */
     if (evicted.length) {
       console.warn("Evicted stored transcripts to stay under quota", evicted);
+      const names = evicted
+        .map((id) => index.find((meta) => meta.id === id)?.title ?? id)
+        .join(", ");
+      toast.warning(
+        evicted.length === 1
+          ? `Storage is full — cleared the transcript of "${names}"`
+          : `Storage is full — cleared ${evicted.length} older transcripts`,
+        { id: "session-storage-evicted", description: "Those sessions now open empty." },
+      );
+    }
+
+    if (!ok) {
+      toast.error("This conversation is no longer being saved", {
+        id: "session-storage-full",
+        description: "Storage is full and nothing else can be cleared.",
+      });
     }
     sessionsRef.current = next;
     writeIndex(storage, next);

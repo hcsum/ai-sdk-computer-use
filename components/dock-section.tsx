@@ -5,7 +5,20 @@ import { ChevronDown, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /** How much of the viewport an open section takes. */
-const OPEN_HEIGHT = "h-[45dvh]";
+const OPEN_HEIGHT = "h-[52dvh]";
+
+/**
+ * An open section is a different surface from the chat, not a continuation of
+ * it. `--muted` cannot say that — it sits 3% off `--background` in light mode,
+ * so the seam against the last message all but disappears.
+ *
+ * Raw zinc rather than a semantic token because the palette has none for a
+ * recessed surface: every neutral it defines sits within a few percent of
+ * `--background`. Each mode moves away from the page in its own direction —
+ * light goes down to zinc-200, dark goes past the background to black — so the
+ * cards inside, which stay `bg-background`, read as raised in both.
+ */
+const OPEN_SURFACE = "bg-zinc-200/80 dark:bg-black";
 
 type DockBarProps = {
   icon: LucideIcon;
@@ -69,17 +82,31 @@ export function DockSection({
   return (
     <aside
       className={cn(
-        "flex shrink-0 flex-col overflow-hidden border-t border-border bg-muted/40",
+        "relative z-10 flex shrink-0 flex-col overflow-hidden border-t border-border bg-muted/40",
         // Fixed rather than capped, so a section occupies the same space no
         // matter what is inside it — a height that tracks its contents moves
         // the composer under the user's cursor.
-        isOpen && OPEN_HEIGHT,
+        isOpen && [OPEN_HEIGHT, OPEN_SURFACE],
       )}
     >
       <DockBar {...bar}>{barContent}</DockBar>
       {isOpen || keepMounted ? (
         <div
-          className={cn("min-h-0", isOpen ? "flex-1" : "h-0", bodyClassName)}
+          className={cn(
+            "min-h-0 overflow-hidden",
+            // A collapsed `keepMounted` body is a zero-height box whose contents
+            // still have layout: the desktop's "New desktop" button is absolute
+            // and sits 44px below the box, and the VNC iframe is a cross-process
+            // compositing layer. Height alone leaves both of those to the
+            // ancestor's clip, and a live iframe's layer does not always get
+            // re-clipped when only the container's height changes — which is the
+            // stream bleeding over the bar below it until something forces a
+            // repaint. `invisible` takes it out of painting altogether, and
+            // unlike unmounting or `display: none` it does not drop the
+            // connection.
+            isOpen ? "flex-1" : "h-0 invisible pointer-events-none",
+            bodyClassName,
+          )}
           aria-hidden={!isOpen}
         >
           {children}

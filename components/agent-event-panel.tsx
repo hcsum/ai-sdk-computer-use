@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 
 import { agentEventKey, isLifecycleFailure, type AgentEvent } from "@/lib/agent-events";
 import {
@@ -23,10 +24,12 @@ import { DockSection } from "@/components/dock-section";
 import {
   Activity,
   Bot,
+  Check,
   CheckCircle2,
   CircleAlert,
   CircleSlash,
   Clock3,
+  Copy,
   MessageSquare,
   MonitorUp,
 } from "lucide-react";
@@ -70,6 +73,58 @@ const Stat = ({ label, value }: { label: string; value: string }) => (
     <div className="truncate font-mono text-[11px] text-foreground">{value}</div>
   </div>
 );
+
+/**
+ * Ids are the one thing here you need *outside* the app — to grep a log, to
+ * look a sandbox up. They are also too long to read off the screen and retype,
+ * and the cell truncates them anyway, so the whole cell is the copy target.
+ *
+ * `navigator.clipboard` needs a secure context; over plain HTTP on a LAN
+ * address it is simply absent, and a button that silently does nothing is worse
+ * than one that says why.
+ */
+const CopyableStat = ({
+  label,
+  value,
+  copyable,
+}: {
+  label: string;
+  value: string;
+  copyable: boolean;
+}) => {
+  const [copied, setCopied] = useState(false);
+
+  if (!copyable) return <Stat label={label} value={value} />;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      toast.error("Could not copy — the clipboard needs a secure context");
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={`Copy ${label.toLowerCase()}: ${value}`}
+      className="group rounded-md border border-border bg-background px-2 py-1.5 text-left transition-colors hover:border-foreground/30"
+    >
+      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+        {label}
+        {copied ? (
+          <Check className="size-3 text-emerald-600 dark:text-emerald-400" />
+        ) : (
+          <Copy className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
+        )}
+      </div>
+      <div className="truncate font-mono text-[11px] text-foreground">{value}</div>
+    </button>
+  );
+};
 
 export function AgentEventPanel({
   events,
@@ -122,8 +177,17 @@ export function AgentEventPanel({
               read the log *against*, and they are useless once scrolled away. */}
           <div className="shrink-0 px-4">
             <div className="mb-3 grid grid-cols-2 gap-1.5">
-              <Stat label="Session" value={sessionId} />
-              <Stat label="Sandbox" value={sandboxId ?? "none"} />
+              <CopyableStat
+                label="Session"
+                value={sessionId}
+                copyable={Boolean(sessionId)}
+              />
+              {/* "none" is a state, not an id — nothing to put on the clipboard. */}
+              <CopyableStat
+                label="Sandbox"
+                value={sandboxId ?? "none"}
+                copyable={Boolean(sandboxId)}
+              />
               <Stat
                 label="VM time"
                 value={formatDuration(summary.totalDurationMs) ?? "0ms"}

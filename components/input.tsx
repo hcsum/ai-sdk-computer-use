@@ -1,5 +1,6 @@
 import { ArrowUp } from "lucide-react";
 import { Input as ShadcnInput } from "./ui/input";
+import { cn } from "@/lib/utils";
 
 interface InputProps {
   input: string;
@@ -18,15 +19,33 @@ export const Input = ({
   status,
   stop,
 }: InputProps) => {
+  const isDisabled = isLoading || isInitializing;
+
   return (
     <div className="relative w-full">
       <ShadcnInput
-        className="bg-secondary py-6 w-full rounded-xl pr-12"
+        className={cn(
+          "py-6 w-full rounded-xl pr-12 transition-colors",
+          // Enabled is a clean white field you type into; disabled fills with
+          // grey and dashes its edge. The shadcn default is `opacity-50`, a
+          // barely dimmer version of the same box that says nothing about why,
+          // so `disabled:opacity-100` turns it off — the placeholder is now
+          // what explains the state, and it has to stay readable.
+          isDisabled
+            ? "bg-muted border-dashed border-border disabled:opacity-100"
+            : "bg-background border-border",
+        )}
         value={input}
         autoFocus
-        placeholder={"Tell me what to do..."}
+        placeholder={
+          isInitializing
+            ? "Starting the desktop…"
+            : isLoading
+              ? "The agent is working — stop it to type"
+              : "Tell me what to do..."
+        }
         onChange={handleInputChange}
-        disabled={isLoading || isInitializing}
+        disabled={isDisabled}
       />
       {status === "streaming" || status === "submitted" ? (
         <button

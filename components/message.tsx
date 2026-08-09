@@ -156,14 +156,20 @@ const PurePreviewMessage = ({
                         onSelectEvent(isSelected ? null : eventKey);
                       }}
                       className={cn(
-                        "flex flex-col gap-2 p-2 mb-3 text-sm bg-muted/50 rounded-md border cursor-pointer transition-colors",
+                        // Outline only. The fill made every tool call a block of
+                        // tint in a column that is otherwise text, which reads
+                        // as more weight than a single click deserves.
+                        "flex flex-col gap-2 p-2 mb-3 text-sm rounded-md border cursor-pointer transition-colors",
                         isSelected
                           ? "border-blue-400 ring-1 ring-blue-200 dark:border-blue-500"
                           : "border-border hover:border-foreground/30",
                       )}
                     >
                       <div className="flex-1 flex items-center justify-center">
-                        <div className="flex items-center justify-center w-8 h-8 bg-background rounded-full">
+                        {/* `bg-muted`, not `bg-background`: with the card's own
+                            fill gone, a background-coloured disc against the
+                            page is no disc at all. */}
+                        <div className="flex items-center justify-center w-8 h-8 bg-muted rounded-full">
                           <ActionIcon className="w-4 h-4" />
                         </div>
                         <div className="flex-1">

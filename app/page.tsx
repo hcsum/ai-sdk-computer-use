@@ -16,6 +16,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import type { ImperativePanelHandle } from "react-resizable-panels";
 import { ABORTED, cn } from "@/lib/utils";
 import {
   agentEventKey,
@@ -107,6 +108,9 @@ export default function Chat() {
   // so recording one needs the message count as of *now* — async callbacks would
   // otherwise close over a stale `messages`.
   const messageCountRef = useRef(0);
+  // Only ever read to expand the inspector when an event is selected — the
+  // panel's size is otherwise the user's to set and this never fights it.
+  const inspectorPanelRef = useRef<ImperativePanelHandle>(null);
   const sandboxIdRef = useRef<string | null>(null);
   sandboxIdRef.current = sandboxId;
   const projectToolEventsRef = useRef(createToolEventProjector());
@@ -240,9 +244,22 @@ export default function Chat() {
    *
    * Both layouts are mounted at once behind breakpoint classes, so the hidden
    * one is skipped by `offsetParent` rather than scrolled invisibly.
+   *
+   * The inspector is collapsible, and a user who dragged it shut has no way to
+   * know that selecting an event was supposed to do anything — the click lands,
+   * the state changes, and nothing on screen moves. Expanding it is therefore
+   * part of what "select" means here, exactly as it already is in the mobile
+   * dock. Deselecting leaves it open on its empty state; collapsing the panel
+   * out from under the cursor would be the same disappearance in reverse.
    */
-  const selectAndRevealEvent = useCallback((eventId: string | null) => {
+  const selectEventOnDesktop = useCallback((eventId: string | null) => {
     setSelectedEventId(eventId);
+    if (!eventId) return;
+    if (inspectorPanelRef.current?.isCollapsed()) inspectorPanelRef.current.expand();
+  }, []);
+
+  const selectAndRevealEvent = useCallback((eventId: string | null) => {
+    selectEventOnDesktop(eventId);
     if (!eventId) return;
 
     requestAnimationFrame(() => {
@@ -253,7 +270,7 @@ export default function Chat() {
           card.scrollIntoView({ behavior: "smooth", block: "center" });
         });
     });
-  }, []);
+  }, [selectEventOnDesktop]);
 
   // Stable identity: `DesktopPanel` is memoised, and a handler rebuilt on every
   // streamed token would defeat that outright.
@@ -517,7 +534,10 @@ export default function Chat() {
                       isLatestMessage={i === messages.length - 1}
                       toolEvents={toolEventsById}
                       selectedEventId={selectedEventId}
-                      onSelectEvent={setSelectedEventId}
+                      // Not `selectAndRevealEvent`: the card the user just
+                      // clicked is already in front of them, and scrolling it to
+                      // centre would move the transcript for no reason.
+                      onSelectEvent={selectEventOnDesktop}
                     />
                   ))}
                   <div ref={desktopEndRef} className="pb-2" />
@@ -570,6 +590,7 @@ export default function Chat() {
               <ResizableHandle withHandle />
 
               <ResizablePanel
+                ref={inspectorPanelRef}
                 defaultSize={30}
                 minSize={15}
                 collapsible
