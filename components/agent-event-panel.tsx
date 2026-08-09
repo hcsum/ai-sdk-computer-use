@@ -44,7 +44,7 @@ type AgentEventPanelProps = {
   /**
    * Controlled expansion, for the layouts where this panel shares its space
    * with another one and only one of them may be open. Omit both and the panel
-   * owns its own state, which is what the `xl` layout wants — there the desktop
+   * owns its own state, which is what the `lg` layout wants — there the desktop
    * has its own column and nothing competes with the log.
    */
   isOpen?: boolean;

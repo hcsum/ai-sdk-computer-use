@@ -27,6 +27,8 @@ import {
   mergeAgentEvents,
   type LifecycleEvent,
 } from "@/lib/agent-events";
+import { isUpstreamCapacityError } from "@/lib/ai/errors";
+import { BootOverlay } from "@/components/boot-overlay";
 import { DesktopDock } from "@/components/desktop-dock";
 import { DockSection } from "@/components/dock-section";
 import { SessionSidebar } from "@/components/session-sidebar";
@@ -35,7 +37,7 @@ import { useMediaQuery } from "@/lib/use-media-query";
 import { useSessions, type LiveSessionState } from "@/lib/use-sessions";
 import { PanelLeft, SquareDashedMousePointer } from "lucide-react";
 
-/** The docked sections below `xl`, of which exactly one may be open. */
+/** The docked sections below `lg`, of which exactly one may be open. */
 type DockName = "desktop" | "events" | "inspector";
 
 const ChatHeader = ({ onToggleSessions }: { onToggleSessions?: () => void }) => (
@@ -91,17 +93,20 @@ export default function Chat() {
   const [mobileContainerRef, mobileEndRef] = useScrollToBottom();
 
   const [isInitializing, setIsInitializing] = useState(true);
+  // Flips once the first connect attempt settles, successfully or not, and never
+  // goes back — it gates the boot overlay, which is a first-run thing only.
+  const [hasBooted, setHasBooted] = useState(false);
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [sandboxId, setSandboxId] = useState<string | null>(null);
   const [lifecycleEvents, setLifecycleEvents] = useState<LifecycleEvent[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   // Two different things: the rail narrows to initials on desktop, and opens as
-  // a drawer below `xl`, where there is no width to give it.
+  // a drawer below `lg`, where there is no width to give it.
   const [isSessionRailCollapsed, setIsSessionRailCollapsed] = useState(false);
   const [isSessionListOpen, setIsSessionListOpen] = useState(false);
-  // Below `xl` the desktop, the event log and the inspector are peers sharing
+  // Below `lg` the desktop, the event log and the inspector are peers sharing
   // the bottom of the chat column, and at most one is open — there is not
-  // enough height for two. Above `xl` each has its own space and none of this
+  // enough height for two. Above `lg` each has its own space and none of this
   // applies: the event panel goes back to owning its own state.
   const [openDock, setOpenDock] = useState<DockName | null>(null);
   // Lifecycle events are ordered against the conversation, not the wall clock,
@@ -124,8 +129,8 @@ export default function Chat() {
     sandboxId: null,
   });
   // Read in JS, not CSS: `DesktopPanel` must exist exactly once, and a second
-  // copy hidden behind `xl:hidden` is a second VNC client on the same desktop.
-  const isWide = useMediaQuery("(min-width: 1280px)");
+  // copy hidden behind `lg:hidden` is a second VNC client on the same desktop.
+  const isWide = useMediaQuery("(min-width: 1024px)");
 
   const {
     sessions,
@@ -159,20 +164,26 @@ export default function Chat() {
     maxSteps: 30,
     onError: (error) => {
       console.error(error);
-      // The server already rendered the upstream cause into `message` — surface
-      // it, since "try again later" is wrong advice for a dead relay channel or
-      // a model id the gateway cannot route.
+      // The server rendered the upstream cause into `message`. It is kept whole
+      // on the lifecycle event — the event log is where technical detail belongs
+      // — while the toast gets wording matched to who can actually fix it.
       const reason = error.message?.trim() || "Please try again later.";
+      const isUpstream = isUpstreamCapacityError(reason);
       recordLifecycleEvent("chat_error", "Model request failed", sandboxId, reason);
-      toast.error("The model request failed", {
-        description: reason,
-        richColors: true,
-        position: "top-center",
-        duration: 10000,
-        // The user turn is still in `messages` with no answer, so replaying it
-        // is exactly what a retry means here.
-        action: { label: "Retry", onClick: () => reload() },
-      });
+      toast.error(
+        isUpstream ? "The model provider is busy" : "The model request failed",
+        {
+          description: isUpstream
+            ? "The upstream API gateway had no channel available for this model. Nothing is wrong with your session — retry in a moment. Full response is in the event log."
+            : reason,
+          richColors: true,
+          position: "top-center",
+          duration: 10000,
+          // The user turn is still in `messages` with no answer, so replaying it
+          // is exactly what a retry means here.
+          action: { label: "Retry", onClick: () => reload() },
+        },
+      );
     },
   });
 
@@ -327,6 +338,7 @@ export default function Chat() {
         toast.error("Failed to initialize desktop");
       } finally {
         setIsInitializing(false);
+        setHasBooted(true);
       }
     },
     [recordLifecycleEvent],
@@ -453,7 +465,7 @@ export default function Chat() {
   );
 
   /**
-   * Below `xl` a selection has somewhere to go: the inspector is its own docked
+   * Below `lg` a selection has somewhere to go: the inspector is its own docked
    * section, so opening it is what "select" means there. Deselecting leaves the
    * section open on its empty state rather than collapsing the strip under the
    * user's finger.
@@ -488,8 +500,10 @@ export default function Chat() {
 
   return (
     <div className="flex h-dvh relative">
+      {hasBooted ? null : <BootOverlay />}
+
       {/* Resizable Panels */}
-      <div className="hidden min-w-0 flex-1 xl:block">
+      <div className="hidden min-w-0 flex-1 lg:block">
         <ResizablePanelGroup direction="horizontal" className="h-full">
           {/* Chat: the session rail, the transcript, the composer and the debug
               panel. The rail lives inside this panel rather than beside it —
@@ -553,7 +567,7 @@ export default function Chat() {
                 />
 
                 <div className="bg-background">
-                  <form onSubmit={handleSubmit} className="p-4">
+                  <form onSubmit={handleSubmit} className="px-4 pt-4 pb-8">
                     <Input
                       handleInputChange={handleInputChange}
                       input={input}
@@ -604,14 +618,14 @@ export default function Chat() {
         </ResizablePanelGroup>
       </div>
 
-      {/* Below `xl`: one column, with the desktop and the event log docked
+      {/* Below `lg`: one column, with the desktop and the event log docked
           under it as mutually exclusive sections. */}
-      <div className="w-full xl:hidden flex flex-col bg-background">
+      <div className="w-full lg:hidden flex flex-col bg-background">
         <ChatHeader onToggleSessions={() => setIsSessionListOpen((open) => !open)} />
 
         {/* No room for a rail here, so the same component becomes a drawer. */}
         {isSessionListOpen ? (
-          <div className="fixed inset-0 z-40 xl:hidden">
+          <div className="fixed inset-0 z-40 lg:hidden">
             <div
               className="absolute inset-0 bg-black/40"
               onClick={() => setIsSessionListOpen(false)}
@@ -689,7 +703,7 @@ export default function Chat() {
         </DockSection>
 
         <div className="bg-background">
-          <form onSubmit={handleSubmit} className="p-4">
+          <form onSubmit={handleSubmit} className="px-4 pt-4 pb-8">
             <Input
               handleInputChange={handleInputChange}
               input={input}

@@ -14,7 +14,7 @@ type DesktopDockProps = {
 };
 
 /**
- * The desktop, docked under the chat below `xl`, where there is no room for a
+ * The desktop, docked under the chat below `lg`, where there is no room for a
  * second column.
  *
  * `keepMounted` is the whole reason this is not three lines inline: the VNC

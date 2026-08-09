@@ -157,3 +157,23 @@ Open [http://localhost:3000](http://localhost:3000) to use the computer use agen
 | `VERCEL_PROJECT_ID` | Alt* | Required with `VERCEL_TOKEN` |
 
 \* Either `VERCEL_OIDC_TOKEN` (via `vercel env pull`) or the `VERCEL_TOKEN` + team/project IDs are required for Sandbox authentication.
+
+## Known upstream limitation
+
+When running against a shared relay (`ANTHROPIC_BASE_URL`), the gateway
+intermittently answers with a 503 whose body reads `无可用渠道 / no available
+channel`: it has no upstream slot for the requested model at that instant. This
+originates in the relay's routing pool, not in this app — the same request
+succeeds seconds later with no change on this side.
+
+What the app does about it:
+
+- The request is retried five times with exponential backoff before anything
+  reaches the UI, which absorbs most occurrences.
+- If they all fail, the toast says the provider is busy and offers **Retry**,
+  which replays the pending user turn.
+- The gateway's verbatim response is recorded as a `chat_error` lifecycle event,
+  visible in the event log and its inspector.
+
+Retrying is the only remedy. Pointing `ANTHROPIC_BASE_URL` at the official
+Anthropic API (or removing it) avoids the relay entirely.

@@ -45,3 +45,28 @@ export const describeStreamError = (error: unknown): string => {
 
   return truncate(String(error));
 };
+
+/**
+ * The gateway in front of the model is shared and occasionally has no channel
+ * to route to — it answers 503 with `无可用渠道 / no available channel`, or 429
+ * when the pool is saturated. Nothing about that is caused by this app or fixable
+ * from it, so it gets its own wording: waiting and retrying is the whole remedy,
+ * whereas a 400 or a tool crash means something here is actually wrong.
+ */
+const GATEWAY_STATUS = ["429", "502", "503", "504"];
+const GATEWAY_PHRASES = [
+  "无可用渠道",
+  "无可用",
+  "no available channel",
+  "distributor",
+  "overloaded",
+  "rate limit",
+];
+
+export const isUpstreamCapacityError = (message: string): boolean => {
+  const lower = message.toLowerCase();
+  return (
+    GATEWAY_STATUS.some((status) => message.startsWith(`${status}:`)) ||
+    GATEWAY_PHRASES.some((phrase) => lower.includes(phrase.toLowerCase()))
+  );
+};
