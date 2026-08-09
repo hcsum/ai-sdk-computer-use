@@ -26,16 +26,14 @@ export const Input = ({
       <ShadcnInput
         className={cn(
           "py-6 w-full rounded-xl pr-12 transition-colors",
-          // Enabled reads as a surface you can type on: a lifted fill and a
-          // real border. Disabled drops to the page's own colour with a dashed
-          // edge — the shadcn default is `opacity-50`, which on this palette is
-          // a barely dimmer version of the same box and says nothing about why.
-          // `disabled:opacity-100` overrides the base component's blanket
-          // `opacity-50`, which would fade out the placeholder — and the
-          // placeholder is now the thing saying why the field is unavailable.
+          // Enabled is a clean white field you type into; disabled fills with
+          // grey and dashes its edge. The shadcn default is `opacity-50`, a
+          // barely dimmer version of the same box that says nothing about why,
+          // so `disabled:opacity-100` turns it off — the placeholder is now
+          // what explains the state, and it has to stay readable.
           isDisabled
-            ? "bg-transparent border-dashed border-border/70 disabled:opacity-100"
-            : "bg-secondary border-border",
+            ? "bg-muted border-dashed border-border disabled:opacity-100"
+            : "bg-background border-border",
         )}
         value={input}
         autoFocus
