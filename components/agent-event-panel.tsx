@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { agentEventKey, isLifecycleFailure, type AgentEvent } from "@/lib/agent-events";
@@ -142,12 +142,36 @@ export function AgentEventPanel({
   const isOpen = controlledIsOpen ?? uncontrolledIsOpen;
   const toggle = onToggle ?? (() => setUncontrolledIsOpen((open) => !open));
   const [filter, setFilter] = useState<EventFilter>("all");
+  const listRef = useRef<HTMLDivElement>(null);
+  const shouldStickToBottomRef = useRef(true);
 
   const status = deriveAgentStatus(events, chatStatus);
   const summary = useMemo(() => summarizeEvents(events), [events]);
   const actions = useMemo(() => countActions(events), [events]);
   const visibleEvents = useMemo(() => filterEvents(events, filter), [events, filter]);
+  const visibleEventSignature = useMemo(
+    () =>
+      visibleEvents
+        .map((event) =>
+          event.kind === "tool"
+            ? [
+                agentEventKey(event),
+                event.status,
+                event.durationMs ?? "",
+                event.tool === "computer" && event.hasScreenshot ? "image" : "",
+              ].join(":")
+            : `${agentEventKey(event)}:${event.kind}`,
+        )
+        .join("|"),
+    [visibleEvents],
+  );
   const statusStyle = STATUS_STYLES[status];
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!isOpen || !list || !shouldStickToBottomRef.current) return;
+    list.scrollTop = list.scrollHeight;
+  }, [isOpen, visibleEventSignature]);
 
   return (
     <DockSection
@@ -228,7 +252,16 @@ export function AgentEventPanel({
           </div>
 
           {/* The log takes whatever the fixed panel height leaves it. */}
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 pb-3">
+          <div
+            ref={listRef}
+            onScroll={(event) => {
+              const list = event.currentTarget;
+              const distanceFromBottom =
+                list.scrollHeight - list.scrollTop - list.clientHeight;
+              shouldStickToBottomRef.current = distanceFromBottom < 12;
+            }}
+            className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 pb-3"
+          >
             {visibleEvents.length === 0 ? (
               <div className="rounded-lg border border-dashed border-border bg-background px-3 py-4 text-xs text-muted-foreground">
                 {events.length === 0

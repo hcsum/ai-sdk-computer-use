@@ -2,178 +2,114 @@ Author: Haochen Xu
 
 # AI Agent Dashboard
 
-A computer-use AI agent that drives a real Linux desktop in a Vercel Sandbox, built on
-[`vercel-labs/ai-sdk-computer-use`](https://github.com/vercel-labs/ai-sdk-computer-use).
+Production frontend extension of `vercel-labs/ai-sdk-computer-use`: chat on the left, live VNC on the right, typed agent events, inspectable tool calls and persistent multi-session history.
 
-- [Features](#features)
-- [How It Works](#how-it-works)
-- [Model Access & Tool Modes](#model-access--tool-modes)
-- [Running Locally](#running-locally)
-- [Environment Variables](#environment-variables)
+Live: https://ai-agent-dashboard-three-steel.vercel.app/  
+Demo: TBD
 
-## Features
+## What to Review
 
-- Streaming text responses powered by the [AI SDK](https://sdk.vercel.ai/docs).
-- Claude with [computer use](https://sdk.vercel.ai/docs/guides/computer-use) and bash tool capabilities.
-- Remote desktop environment running in a [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) with Chrome, a window manager, and VNC streaming.
-- Provider, model and tool-declaration strategy are all configuration, so the agent runs
-  against the official Anthropic API or an Anthropic-compatible relay without code changes.
-- [shadcn/ui](https://ui.shadcn.com/) components for a modern, responsive UI powered by [Tailwind CSS](https://tailwindcss.com).
-- Built with the latest [Next.js](https://nextjs.org) App Router.
+- Dashboard layout and session wiring: `app/page.tsx`
+- Inline tool call cards: `components/message.tsx`
+- Collapsible event store view: `components/agent-event-panel.tsx`
+- Expanded event inspector: `components/event-inspector.tsx`
+- VNC render isolation: `components/desktop-panel.tsx`
+- Typed event logic: `lib/agent-events.ts`, `lib/agent-event-stats.ts`
+- Session persistence: `lib/use-sessions.ts`, `lib/session-store.ts`
 
-## How It Works
+## Component Map and Data Flow
 
-The app spins up a Vercel Sandbox from a pre-built snapshot that includes:
+```mermaid
+flowchart LR
+  User["User prompt"]
+  Page["app/page.tsx"]
+  SessionState["useSessions + localStorage"]
+  ChatState["useChat messages"]
+  Lifecycle["lifecycleEvents"]
+  EventsState["derived AgentEvent[]"]
+  Sidebar["SessionSidebar"]
+  Chat["PreviewMessage inline tools"]
+  EventPanel["AgentEventPanel"]
+  Inspector["EventInspector"]
+  Desktop["DesktopPanel VNC iframe"]
 
-- **Xvnc** — a virtual X11 display server
-- **openbox** — a lightweight window manager
-- **noVNC + websockify** — streams the desktop to the browser via WebSocket
-- **Google Chrome** — auto-launched so the AI agent has a browser ready
-- **xdotool + ImageMagick** — for mouse/keyboard control and screenshots
-
-When a user sends a message, Claude uses the `computer` tool (screenshot, click, type, scroll) and the `bash` tool (run shell commands) to interact with the sandbox desktop. The noVNC stream is displayed in a resizable iframe alongside the chat.
-
-### Architecture
-
+  User --> Page
+  Page --> SessionState
+  Page --> ChatState
+  Page --> Lifecycle
+  Page --> Desktop
+  SessionState --> Sidebar
+  SessionState --> ChatState
+  ChatState --> Chat
+  ChatState --> EventsState
+  Lifecycle --> EventsState
+  EventsState --> Chat
+  EventsState --> EventPanel
+  EventsState --> Inspector
 ```
-User ↔ Next.js Chat UI ↔ AI SDK ↔ Claude (via lib/ai/provider.ts)
-                                        ↓
-                                  Vercel Sandbox
-                              ┌─────────────────────┐
-                              │  Xvnc (:99)         │
-                              │  openbox             │
-                              │  Chrome              │
-                              │  websockify → noVNC  │
-                              └─────────────────────┘
-                                        ↓
-                              noVNC iframe in browser
-```
 
-## Model Access & Tool Modes
+There are two source-of-truth layers. At runtime, `useChat.messages` owns the active transcript. Across reloads and inactive sessions, `localStorage` owns the persisted session body: messages, lifecycle events and the current sandbox binding.
 
-The upstream demo hardcodes `api.anthropic.com` and a specific model id, and relies on
-Anthropic's *provider-defined* `computer_20250124` / `bash_20250124` tools. Two changes
-make that portable.
+`AgentEvent[]` is a derived view over `messages + lifecycleEvents`, not a second transcript store. It feeds both the inline tool cards and the debug surfaces.
 
-**The provider is constructed, not imported.** `@ai-sdk/anthropic`'s default `anthropic`
-export resolves its base URL at module load and never reads `ANTHROPIC_BASE_URL`, so
-`lib/ai/provider.ts` builds the provider explicitly from `ANTHROPIC_API_KEY`,
-`ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL`. The base URL must include `/v1` — the SDK
-requests `${baseURL}/messages` and never appends the version segment itself.
+Event model in one pass:
 
-**The computer and bash tools are declared two ways**, selected by `COMPUTER_TOOL_MODE`:
+- Tool events are projected from `messages.parts[].toolInvocation`.
+- Turn events are projected from `messages`.
+- Lifecycle events are stored separately because AI SDK messages do not contain session or sandbox lifecycle facts.
+- Persisted sessions store `messages + lifecycleEvents + sandboxId`; restoring a session puts `messages` back into `useChat`.
 
-| Mode | Declaration | Use when |
-|---|---|---|
-| `native` | `anthropicProvider.tools.computer_20250124(…)` | Running against the official API. The model is trained on this tool, so click accuracy is best. |
-| `schema` (default) | `tool({ description, parameters: z.object(…), execute })` | Running against a relay. Provider-defined tools carry no `input_schema`; proxies that normalise the tool list drop them, and the model then emits `computer` calls with an empty `{}` input. |
+## Key Decisions
 
-Both branches share one `executeComputerAction(sandboxId)` closure, so the `xdotool`
-implementation exists once and the two paths cannot drift. Under `schema` mode the tool
-description has to supply what the trained tool would have implied — the coordinate
-contract (1024x768, origin top-left) and the observe-then-act loop.
+**Event log as a derived in-memory view.**
 
-The full diagnosis, including the `curl` probes that isolated the relay's behaviour, is in
-[`docs/model-access-notes.md`](docs/model-access-notes.md).
+- The event log is computed from `messages`, not stored as its own persistent table.
+- Once a session is active, `useChat.messages` is the authoritative transcript.
+- Tool and turn events are projected from it; lifecycle events are stored separately because AI SDK messages do not contain them.
+- This repeats a linear projection, `O(active session messages + parts)`, when `messages` changes.
+- That cost is bounded by `maxSteps`, runs only for the active session, keeps event objects light, and reads raw screenshots only when an event is selected.
+- The trade-off keeps the debug UI from drifting away from the transcript sent back to the model or persisted for restore.
 
-## Running Locally
+See `docs/event-model.md`.
 
-### Prerequisites
+**Durable conversation identity.** `useChat` is keyed by session id, not sandbox id, so a conversation survives desktop expiry, reconnects and replacement VMs without being treated as a new chat.
 
-- Node.js 18+
-- A [Vercel](https://vercel.com) account (for Sandbox access)
-- An [Anthropic API key](https://console.anthropic.com/)
+**Server-measured tool timing.** Tool duration is measured inside the server-side sandbox executor, not from browser stream observation time. The event log reports VM action time instead of model, network or React render latency, and the metadata rides in the tool result so restored sessions keep the same timings.
 
-### 1. Install dependencies
+**Stable event ordering.** Chat can render directly from the `messages` array, but the event log merges three sources: turns from `messages`, tool calls from message parts, and lifecycle events recorded by the page. Timestamps come from different clocks, so they are display-only. Ordering is based on each event's position in the transcript: `messageIndex * ORDER_BLOCK + slot`, where slot `0` is the turn and later slots are tool parts. That keeps the timeline stable when a pending tool receives server timing or when browser and server clocks disagree.
+
+**Stream-friendly localStorage persistence.** The storage layer works around localStorage's two constraints: synchronous writes and a small per-origin quota, typically 5 MiB for localStorage. Streaming updates are debounced and flushed on `pagehide`; screenshot redaction and old-session eviction keep storage pressure visible and recoverable while preserving the `tool_use` / `tool_result` structure Anthropic requires.
+
+**VNC outside chat churn.** The VNC iframe is isolated from chat and event state so streamed tokens do not remount or reload the desktop connection. `DesktopPanel` receives only stable desktop props, is memoized, and is mounted once per responsive layout to avoid duplicate VNC clients.
+
+**Relay-compatible tool mode.** `COMPUTER_TOOL_MODE=schema` re-declares computer and bash as schema tools for Anthropic-compatible relays; `native` keeps Anthropic's provider-defined tools for the official API. See `docs/model-access-notes.md`.
+
+## Validation
+
+- `pnpm test` — 69 tests
+- `npx tsc --noEmit`
+- `npm run lint`
+- `npm run build`
+
+## Local Run
 
 ```bash
 pnpm install
-```
-
-### 2. Set up Vercel credentials
-
-Install the [Vercel CLI](https://vercel.com/docs/cli) and link your project:
-
-```bash
-pnpm install -g vercel
-vercel link
-vercel env pull
-```
-
-This creates a `.env.local` file with `VERCEL_OIDC_TOKEN` for Sandbox authentication.
-
-Alternatively, set `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID` manually in your `.env.local`.
-
-### 3. Create a sandbox snapshot
-
-The snapshot pre-installs the desktop environment (Xvnc, Chrome, openbox, noVNC, xdotool, ImageMagick) so sandboxes boot in seconds.
-
-```bash
-npx tsx lib/sandbox/create-snapshot.ts
-```
-
-This takes ~10 minutes. When done, it outputs a snapshot ID. Add it to your `.env.local`:
-
-```
-SANDBOX_SNAPSHOT_ID=snap_xxxxxxxxxxxxx
-```
-
-### 4. Configure model access
-
-Copy `.env.example` for the full list. At minimum:
-
-```
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-To run against an Anthropic-compatible relay instead, add:
-
-```
-ANTHROPIC_BASE_URL=https://your-relay.example/v1
-ANTHROPIC_MODEL=claude-sonnet-5
-COMPUTER_TOOL_MODE=schema
-```
-
-### 5. Start the dev server
-
-```bash
+cp .env.example .env.local
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to use the computer use agent.
+Required environment is documented in `.env.example`: `ANTHROPIC_API_KEY`, `SANDBOX_SNAPSHOT_ID`, and Vercel Sandbox credentials.
 
-## Environment Variables
+## Milestones
 
-| Variable | Required | Description |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | Anthropic API key for Claude |
-| `SANDBOX_SNAPSHOT_ID` | Yes | Vercel Sandbox snapshot with the desktop environment |
-| `ANTHROPIC_BASE_URL` | No | Anthropic-compatible endpoint, **including `/v1`**. Defaults to the official API |
-| `ANTHROPIC_MODEL` | No | Model id. Defaults to `claude-sonnet-5` |
-| `COMPUTER_TOOL_MODE` | No | `schema` (default) or `native` — see [Model Access & Tool Modes](#model-access--tool-modes) |
-| `VERCEL_OIDC_TOKEN` | Yes* | Auto-set by `vercel env pull` for Sandbox auth |
-| `VERCEL_TOKEN` | Alt* | Alternative to OIDC — a Vercel personal access token |
-| `VERCEL_TEAM_ID` | Alt* | Required with `VERCEL_TOKEN` |
-| `VERCEL_PROJECT_ID` | Alt* | Required with `VERCEL_TOKEN` |
+1. [Portable model access and a relay-safe tool layer](https://github.com/hcsum/ai-agent-dashboard/pull/1)
+2. [Event model spec for the agent pipeline](https://github.com/hcsum/ai-agent-dashboard/pull/2)
+3. [Typed agent event pipeline with a live timeline panel](https://github.com/hcsum/ai-agent-dashboard/pull/3)
+4. [Turn the event timeline into an inspectable dashboard](https://github.com/hcsum/ai-agent-dashboard/pull/4)
+5. [Multiple sessions, over one useChat](https://github.com/hcsum/ai-agent-dashboard/pull/5)
+6. [Persisted screenshots, a reachable inspector, dock legibility](https://github.com/hcsum/ai-agent-dashboard/pull/6)
 
-\* Either `VERCEL_OIDC_TOKEN` (via `vercel env pull`) or the `VERCEL_TOKEN` + team/project IDs are required for Sandbox authentication.
+## Known Limitation
 
-## Known upstream limitation
-
-When running against a shared relay (`ANTHROPIC_BASE_URL`), the gateway
-intermittently answers with a 503 whose body reads `无可用渠道 / no available
-channel`: it has no upstream slot for the requested model at that instant. This
-originates in the relay's routing pool, not in this app — the same request
-succeeds seconds later with no change on this side.
-
-What the app does about it:
-
-- The request is retried five times with exponential backoff before anything
-  reaches the UI, which absorbs most occurrences.
-- If they all fail, the toast says the provider is busy and offers **Retry**,
-  which replays the pending user turn.
-- The gateway's verbatim response is recorded as a `chat_error` lifecycle event,
-  visible in the event log and its inspector.
-
-Retrying is the only remedy. Pointing `ANTHROPIC_BASE_URL` at the official
-Anthropic API (or removing it) avoids the relay entirely.
+Against a shared relay (`ANTHROPIC_BASE_URL`), the gateway intermittently returns a 503 reading `无可用渠道 / no available channel`: no upstream slot for that model at that instant. Requests retry with backoff; if all attempts fail, the UI offers Retry and records the response as a `chat_error` event.
