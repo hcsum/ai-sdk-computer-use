@@ -6,7 +6,7 @@ import { memo } from "react";
 import equal from "fast-deep-equal";
 import { Streamdown } from "streamdown";
 
-import { ABORTED, cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { agentEventKey, getScreenshotBase64, type ToolEvent } from "@/lib/agent-events";
 import { describeToolAction } from "@/lib/tool-event-display";
 import { CheckCircle, CircleSlash, Loader2, StopCircle } from "lucide-react";
@@ -30,7 +30,7 @@ const ToolStatusIcon = ({
     );
   }
 
-  if (event.error === ABORTED) {
+  if (event.status === "aborted") {
     return <CircleSlash size={14} className="text-amber-600" />;
   }
 
@@ -59,6 +59,25 @@ const PurePreviewMessage = ({
   selectedEventId: string | null;
   onSelectEvent: (eventId: string | null) => void;
 }) => {
+  /**
+   * Only the message actually being written needs Streamdown's streaming mode.
+   *
+   * That mode holds its parsed blocks in state seeded with `[]` and fills them
+   * from a `startTransition`, so the first commit of any `<Streamdown>` renders
+   * nothing. For a token stream that is the point — it keeps typing responsive.
+   * For every other message it is a bug with a long fuse: React entangles that
+   * transition with any other transition already in flight, and `connectDesktop`
+   * puts one in flight for as long as a sandbox takes to boot (it is a Server
+   * Action, which Next dispatches inside `startTransition`). A restored
+   * transcript then sits on screen as empty message frames for six seconds and
+   * fills in exactly when the desktop connects — see docs/performance.md.
+   *
+   * `static` parses during render instead, so a settled message paints with its
+   * text the first time.
+   */
+  const isStreamingNow = isLatestMessage && status === "streaming";
+  const markdownMode = isStreamingNow ? "streaming" : "static";
+
   return (
     <AnimatePresence key={message.id}>
       <motion.div
@@ -91,7 +110,7 @@ const PurePreviewMessage = ({
                             message.role === "user",
                         })}
                       >
-                        <Streamdown>{part.text}</Streamdown>
+                        <Streamdown mode={markdownMode}>{part.text}</Streamdown>
                       </div>
                     </motion.div>
                   );
@@ -196,6 +215,9 @@ export const PreviewMessage = memo(
   PurePreviewMessage,
   (prevProps, nextProps) => {
     if (prevProps.status !== nextProps.status) return false;
+    // Decides `mode` above, so it has to be able to flip a message back out of
+    // streaming mode when the next one starts.
+    if (prevProps.isLatestMessage !== nextProps.isLatestMessage) return false;
     // Selection is a click, not a token, so re-rendering every message on it is
     // cheap — and cheaper than tracking which message owns the selected event.
     if (prevProps.selectedEventId !== nextProps.selectedEventId) return false;

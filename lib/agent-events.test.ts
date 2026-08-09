@@ -225,7 +225,7 @@ describe("agentEventKey", () => {
 });
 
 describe("deriveToolEvents, continued", () => {
-  it("treats a user abort as an error rather than a completed call", () => {
+  it("gives a user abort its own status, neither completed nor failed", () => {
     const events = deriveToolEvents([
       makeMessage([
         toolPart({
@@ -238,7 +238,7 @@ describe("deriveToolEvents, continued", () => {
       ]),
     ]);
 
-    expect(events[0]).toMatchObject({ status: "error", error: ABORTED });
+    expect(events[0]).toMatchObject({ status: "aborted", error: ABORTED });
   });
 
   it("keeps unknown tools in a payload-carrying variant", () => {

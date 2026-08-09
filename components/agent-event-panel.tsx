@@ -8,23 +8,24 @@ import {
   deriveAgentStatus,
   EVENT_FILTERS,
   filterEvents,
+  isAbortedEvent,
   isFailedEvent,
   summarizeEvents,
   type ChatStatus,
   type EventFilter,
 } from "@/lib/agent-event-stats";
 import {
-  describeToolEvent,
-  describeTurnEvent,
+  describeEvent,
   formatDuration,
 } from "@/lib/tool-event-display";
 import { cn } from "@/lib/utils";
+import { DockSection } from "@/components/dock-section";
 import {
   Activity,
   Bot,
   CheckCircle2,
-  ChevronDown,
   CircleAlert,
+  CircleSlash,
   Clock3,
   MessageSquare,
   MonitorUp,
@@ -37,6 +38,14 @@ type AgentEventPanelProps = {
   chatStatus: ChatStatus;
   selectedEventId: string | null;
   onSelectEvent: (eventId: string | null) => void;
+  /**
+   * Controlled expansion, for the layouts where this panel shares its space
+   * with another one and only one of them may be open. Omit both and the panel
+   * owns its own state, which is what the `xl` layout wants — there the desktop
+   * has its own column and nothing competes with the log.
+   */
+  isOpen?: boolean;
+  onToggle?: () => void;
 };
 
 const STATUS_STYLES = {
@@ -50,19 +59,9 @@ const getStatusIcon = (event: AgentEvent) => {
   if (event.kind === "lifecycle") return isLifecycleFailure(event) ? CircleAlert : MonitorUp;
   if (event.kind === "turn") return event.role === "user" ? MessageSquare : Bot;
   if (event.status === "pending") return Clock3;
+  if (event.status === "aborted") return CircleSlash;
   if (event.status === "error") return CircleAlert;
   return CheckCircle2;
-};
-
-const describeEvent = (event: AgentEvent) => {
-  switch (event.kind) {
-    case "tool":
-      return describeToolEvent(event);
-    case "turn":
-      return describeTurnEvent(event);
-    default:
-      return { label: event.label, detail: event.type };
-  }
 };
 
 const Stat = ({ label, value }: { label: string; value: string }) => (
@@ -79,10 +78,14 @@ export function AgentEventPanel({
   chatStatus,
   selectedEventId,
   onSelectEvent,
+  isOpen: controlledIsOpen,
+  onToggle,
 }: AgentEventPanelProps) {
   // Collapsed by default: the transcript is the primary surface, and this is
   // instrumentation you open when you want it.
-  const [isOpen, setIsOpen] = useState(false);
+  const [uncontrolledIsOpen, setUncontrolledIsOpen] = useState(false);
+  const isOpen = controlledIsOpen ?? uncontrolledIsOpen;
+  const toggle = onToggle ?? (() => setUncontrolledIsOpen((open) => !open));
   const [filter, setFilter] = useState<EventFilter>("all");
 
   const status = deriveAgentStatus(events, chatStatus);
@@ -92,74 +95,76 @@ export function AgentEventPanel({
   const statusStyle = STATUS_STYLES[status];
 
   return (
-    <aside className="flex max-h-[45dvh] flex-col border-t border-border bg-muted/40">
-      <button
-        type="button"
-        onClick={() => setIsOpen((open) => !open)}
-        aria-expanded={isOpen}
-        className="flex shrink-0 items-center gap-2 px-4 py-2.5 text-left"
-      >
-        <Activity className="size-4 shrink-0 text-muted-foreground" />
-        <span className="text-sm font-semibold text-foreground">Agent events</span>
-        <span className={cn("size-1.5 shrink-0 rounded-full", statusStyle.dot)} />
-        <span className={cn("text-xs font-medium", statusStyle.text)}>
-          {statusStyle.label}
-        </span>
-        <span className="ml-auto truncate text-[11px] text-muted-foreground">
-          {summary.toolCalls} calls · {summary.pending} pending
-          {summary.failed > 0 ? (
-            <span className="text-red-600 dark:text-red-400"> · {summary.failed} failed</span>
-          ) : null}
-        </span>
-        <ChevronDown
-          className={cn(
-            "size-4 shrink-0 text-muted-foreground transition-transform",
-            isOpen && "rotate-180",
-          )}
-        />
-      </button>
-
+    <DockSection
+      icon={Activity}
+      title="Agent events"
+      isOpen={isOpen}
+      onToggle={toggle}
+      bodyClassName="flex flex-col"
+      barContent={
+        <>
+          <span className={cn("size-1.5 shrink-0 rounded-full", statusStyle.dot)} />
+          <span className={cn("text-xs font-medium", statusStyle.text)}>
+            {statusStyle.label}
+          </span>
+          <span className="ml-auto truncate pr-2 text-[11px] text-muted-foreground">
+            {summary.toolCalls} calls · {summary.pending} pending
+            {summary.failed > 0 ? (
+              <span className="text-red-600 dark:text-red-400"> · {summary.failed} failed</span>
+            ) : null}
+          </span>
+        </>
+      }
+    >
       {isOpen ? (
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3">
-          <div className="mb-3 grid grid-cols-2 gap-1.5">
-            <Stat label="Session" value={sessionId} />
-            <Stat label="Sandbox" value={sandboxId ?? "none"} />
-            <Stat label="VM time" value={formatDuration(summary.totalDurationMs) ?? "0ms"} />
-            <Stat label="Events" value={String(events.length)} />
-          </div>
+        <>
+          {/* Identity, aggregates and the filter row stay put: they are what you
+              read the log *against*, and they are useless once scrolled away. */}
+          <div className="shrink-0 px-4">
+            <div className="mb-3 grid grid-cols-2 gap-1.5">
+              <Stat label="Session" value={sessionId} />
+              <Stat label="Sandbox" value={sandboxId ?? "none"} />
+              <Stat
+                label="VM time"
+                value={formatDuration(summary.totalDurationMs) ?? "0ms"}
+              />
+              <Stat label="Events" value={String(events.length)} />
+            </div>
 
-          {actions.length > 0 ? (
-            <div className="mb-3 flex flex-wrap gap-1">
-              {actions.map(({ action, count }) => (
-                <span
-                  key={action}
-                  className="rounded-full border border-border bg-background px-2 py-0.5 font-mono text-[11px] text-muted-foreground"
+            {actions.length > 0 ? (
+              <div className="mb-3 flex flex-wrap gap-1">
+                {actions.map(({ action, count }) => (
+                  <span
+                    key={action}
+                    className="rounded-full border border-border bg-background px-2 py-0.5 font-mono text-[11px] text-muted-foreground"
+                  >
+                    {action} ×{count}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="mb-2 flex gap-1">
+              {EVENT_FILTERS.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setFilter(option)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[11px] capitalize transition-colors",
+                    option === filter
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border bg-background text-muted-foreground hover:border-foreground/30",
+                  )}
                 >
-                  {action} ×{count}
-                </span>
+                  {option}
+                </button>
               ))}
             </div>
-          ) : null}
-
-          <div className="mb-2 flex gap-1">
-            {EVENT_FILTERS.map((option) => (
-              <button
-                key={option}
-                type="button"
-                onClick={() => setFilter(option)}
-                className={cn(
-                  "rounded-full border px-2 py-0.5 text-[11px] capitalize transition-colors",
-                  option === filter
-                    ? "border-foreground bg-foreground text-background"
-                    : "border-border bg-background text-muted-foreground hover:border-foreground/30",
-                )}
-              >
-                {option}
-              </button>
-            ))}
           </div>
 
-          <div className="space-y-2">
+          {/* The log takes whatever the fixed panel height leaves it. */}
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 pb-3">
             {visibleEvents.length === 0 ? (
               <div className="rounded-lg border border-dashed border-border bg-background px-3 py-4 text-xs text-muted-foreground">
                 {events.length === 0
@@ -204,7 +209,7 @@ export function AgentEventPanel({
                           "bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-400",
                         event.kind === "turn" && "bg-muted text-muted-foreground",
                         event.kind === "tool" &&
-                          event.status === "pending" &&
+                          (event.status === "pending" || event.status === "aborted") &&
                           "bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-400",
                         event.kind === "tool" &&
                           event.status === "complete" &&
@@ -220,6 +225,7 @@ export function AgentEventPanel({
                           className={cn(
                             "uppercase tracking-wide text-muted-foreground",
                             isFailedEvent(event) && "text-red-500",
+                            isAbortedEvent(event) && "text-amber-600 dark:text-amber-400",
                           )}
                         >
                           {event.kind === "tool" ? event.status : event.kind}
@@ -232,7 +238,11 @@ export function AgentEventPanel({
                         <div
                           className={cn(
                             "mt-1 text-[11px]",
-                            cause ? "text-red-600 dark:text-red-400" : "truncate text-muted-foreground",
+                            !cause
+                              ? "truncate text-muted-foreground"
+                              : isAbortedEvent(event)
+                                ? "text-amber-600 dark:text-amber-400"
+                                : "text-red-600 dark:text-red-400",
                           )}
                         >
                           {cause ?? duration}
@@ -244,8 +254,8 @@ export function AgentEventPanel({
               })
             )}
           </div>
-        </div>
+        </>
       ) : null}
-    </aside>
+    </DockSection>
   );
 }

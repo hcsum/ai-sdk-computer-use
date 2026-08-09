@@ -14,8 +14,13 @@ export const isFailedEvent = (event: AgentEvent) => {
   if (event.kind === "lifecycle") return isLifecycleFailure(event);
   // A turn is a marker, not an operation — it has no outcome to fail.
   if (event.kind === "turn") return false;
+  // `aborted` is deliberately not a failure: see the note on `ToolEventStatus`.
   return event.status === "error";
 };
+
+/** An outcome that is neither success nor failure, and is coloured as such. */
+export const isAbortedEvent = (event: AgentEvent) =>
+  event.kind === "tool" && event.status === "aborted";
 
 /**
  * `thinking` and `acting` are both "a turn is in flight", split by whether the

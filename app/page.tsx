@@ -16,7 +16,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { ABORTED } from "@/lib/utils";
+import { ABORTED, cn } from "@/lib/utils";
 import {
   agentEventKey,
   createToolEventProjector,
@@ -26,13 +26,63 @@ import {
   mergeAgentEvents,
   type LifecycleEvent,
 } from "@/lib/agent-events";
+import { DesktopDock } from "@/components/desktop-dock";
+import { DockSection } from "@/components/dock-section";
+import { SessionSidebar } from "@/components/session-sidebar";
+import { describeEvent } from "@/lib/tool-event-display";
+import { useMediaQuery } from "@/lib/use-media-query";
+import { useSessions, type LiveSessionState } from "@/lib/use-sessions";
+import { PanelLeft, SquareDashedMousePointer } from "lucide-react";
 
-const ChatHeader = () => (
+/** The docked sections below `xl`, of which exactly one may be open. */
+type DockName = "desktop" | "events" | "inspector";
+
+const ChatHeader = ({ onToggleSessions }: { onToggleSessions?: () => void }) => (
   <div className="flex items-center justify-between border-b border-border bg-background px-4 py-3">
-    <span className="text-sm font-semibold tracking-tight">Computer Use Agent</span>
+    <div className="flex items-center gap-2">
+      {onToggleSessions ? (
+        <button
+          type="button"
+          onClick={onToggleSessions}
+          aria-label="Sessions"
+          className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <PanelLeft className="size-4" />
+        </button>
+      ) : null}
+      <span className="text-sm font-semibold tracking-tight">Computer Use Agent</span>
+    </div>
     <ThemeToggle />
   </div>
 );
+
+/**
+ * Stands in for a stored transcript during the single render between a session
+ * becoming active and `setMessages` applying it. An empty conversation and a
+ * conversation that has not been painted yet look identical otherwise, and the
+ * first one is a lie.
+ */
+const TranscriptSkeleton = () => (
+  <div className="space-y-6" aria-busy="true" aria-label="Restoring conversation">
+    {[70, 45, 60].map((width, index) => (
+      <div
+        key={width}
+        className={cn("flex flex-col gap-2", index % 2 === 1 && "items-end")}
+      >
+        <div className="h-4 w-24 animate-pulse rounded bg-muted" />
+        <div
+          className="h-16 animate-pulse rounded-xl bg-muted"
+          style={{ width: `${width}%` }}
+        />
+      </div>
+    ))}
+  </div>
+);
+
+const killSandbox = (sandboxId: string) => {
+  // `sendBeacon` because this also has to work from an unload handler.
+  navigator.sendBeacon(`/api/kill-desktop?sandboxId=${encodeURIComponent(sandboxId)}`);
+};
 
 export default function Chat() {
   // Create separate refs for mobile and desktop to ensure both scroll properly
@@ -42,18 +92,47 @@ export default function Chat() {
   const [isInitializing, setIsInitializing] = useState(true);
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [sandboxId, setSandboxId] = useState<string | null>(null);
-  const [sessionId] = useState(
-    () => `session-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  );
   const [lifecycleEvents, setLifecycleEvents] = useState<LifecycleEvent[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const recordedSessionStartRef = useRef(false);
+  // Two different things: the rail narrows to initials on desktop, and opens as
+  // a drawer below `xl`, where there is no width to give it.
+  const [isSessionRailCollapsed, setIsSessionRailCollapsed] = useState(false);
+  const [isSessionListOpen, setIsSessionListOpen] = useState(false);
+  // Below `xl` the desktop, the event log and the inspector are peers sharing
+  // the bottom of the chat column, and at most one is open — there is not
+  // enough height for two. Above `xl` each has its own space and none of this
+  // applies: the event panel goes back to owning its own state.
+  const [openDock, setOpenDock] = useState<DockName | null>(null);
   // Lifecycle events are ordered against the conversation, not the wall clock,
   // so recording one needs the message count as of *now* — async callbacks would
   // otherwise close over a stale `messages`.
   const messageCountRef = useRef(0);
+  const sandboxIdRef = useRef<string | null>(null);
+  sandboxIdRef.current = sandboxId;
   const projectToolEventsRef = useRef(createToolEventProjector());
   const projectTurnEventsRef = useRef(createTurnEventProjector());
+
+  // Written during render, below — `useChat` needs the session id, so the live
+  // state it owns can only be handed back to the session hook through a ref.
+  const liveRef = useRef<LiveSessionState>({
+    messages: [],
+    lifecycleEvents: [],
+    sandboxId: null,
+  });
+  // Read in JS, not CSS: `DesktopPanel` must exist exactly once, and a second
+  // copy hidden behind `xl:hidden` is a second VNC client on the same desktop.
+  const isWide = useMediaQuery("(min-width: 1280px)");
+
+  const {
+    sessions,
+    activeSessionId,
+    isRestoring,
+    createSession,
+    selectSession,
+    deleteSession,
+    takePendingRestore,
+    scheduleFlush,
+  } = useSessions(liveRef);
 
   const {
     messages,
@@ -66,7 +145,10 @@ export default function Chat() {
     reload,
   } = useChat({
     api: "/api/chat",
-    id: sessionId,
+    // Chat identity is the session, never the sandbox: a sandbox lives at most
+    // 45 minutes, and keying the conversation on it would drop the transcript
+    // the moment a session had to reconnect to a new desktop.
+    id: activeSessionId ?? undefined,
     body: {
       sandboxId,
     },
@@ -123,6 +205,7 @@ export default function Chat() {
   // also catches "error", which left the composer disabled with no way back.
   const isLoading = status === "submitted" || status === "streaming";
   messageCountRef.current = messages.length;
+  liveRef.current = { messages, lifecycleEvents, sandboxId };
   const toolEvents = useMemo(() => projectToolEventsRef.current(messages), [messages]);
   // The transcript needs the same events the panel shows, looked up per call.
   const toolEventsById = useMemo(
@@ -198,52 +281,111 @@ export default function Chat() {
     [],
   );
 
-  const refreshDesktop = useCallback(async () => {
-    try {
-      setIsInitializing(true);
-      const { streamUrl, id } = await getDesktopURL(sandboxId || undefined);
-      // console.log("Refreshed desktop connection with ID:", id);
-      setStreamUrl(streamUrl);
-      setSandboxId(id);
-      recordLifecycleEvent(
-        sandboxId && sandboxId === id ? "sandbox_reconnected" : "sandbox_created",
-        sandboxId && sandboxId === id ? "Desktop reconnected" : "New desktop created",
-        id,
-      );
-    } catch (err) {
-      console.error("Failed to refresh desktop:", err);
-      recordLifecycleEvent(
-        "sandbox_error",
-        "Desktop refresh failed",
-        sandboxId,
-        err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      setIsInitializing(false);
+  /**
+   * Connects the desktop, preferring an id the session already carries. A
+   * restored `sandboxId` is a hint, not a guarantee: `getDesktop` reuses it only
+   * while that VM is still running and otherwise creates a fresh one, which is
+   * the normal outcome for any session older than the sandbox lifetime.
+   */
+  const connectDesktop = useCallback(
+    async (preferredId: string | null) => {
+      try {
+        setIsInitializing(true);
+        const { streamUrl, id } = await getDesktopURL(preferredId ?? undefined);
+        setStreamUrl(streamUrl);
+        setSandboxId(id);
+        recordLifecycleEvent(
+          preferredId === id ? "sandbox_reconnected" : "sandbox_created",
+          preferredId === id ? "Desktop reconnected" : "New desktop created",
+          id,
+        );
+      } catch (err) {
+        console.error("Failed to connect desktop:", err);
+        recordLifecycleEvent(
+          "sandbox_error",
+          "Desktop connection failed",
+          preferredId,
+          err instanceof Error ? err.message : String(err),
+        );
+        toast.error("Failed to initialize desktop");
+      } finally {
+        setIsInitializing(false);
+      }
+    },
+    [recordLifecycleEvent],
+  );
+
+  const refreshDesktop = useCallback(
+    () => connectDesktop(sandboxIdRef.current),
+    [connectDesktop],
+  );
+
+  /**
+   * Applies a newly activated session. This is an effect rather than part of the
+   * switch handler because `useChat` keys its state on the session id: calling
+   * `setMessages` before the render that carries the new id would write the
+   * incoming transcript into the outgoing session.
+   */
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const restored = takePendingRestore();
+    if (!restored) return;
+
+    // Both projectors memoise per call/message id from the transcript they were
+    // fed; carrying that across a switch would leak the old session's timings.
+    projectToolEventsRef.current = createToolEventProjector();
+    projectTurnEventsRef.current = createTurnEventProjector();
+
+    // The outgoing desktop is freed rather than left to expire — the Hobby plan
+    // allows ten concurrent sandboxes, and the session that owned this one has
+    // already been written out, so the kill cannot be recorded against it.
+    const outgoingSandboxId = sandboxIdRef.current;
+    if (outgoingSandboxId) killSandbox(outgoingSandboxId);
+
+    setMessages(restored.messages);
+    setLifecycleEvents(restored.lifecycleEvents);
+    // A bare `toolCallId` can name an event in the session being left.
+    setSelectedEventId(null);
+    setStreamUrl(null);
+    setSandboxId(null);
+    // Lifecycle ordering is relative to the message count, and the count for
+    // this session is known now — the render that lowers it has not happened.
+    messageCountRef.current = restored.messages.length;
+
+    // Storage always holds a `session_created` event, so an empty log means a
+    // session that has never been persisted: this one is new.
+    if (restored.lifecycleEvents.length === 0) {
+      recordLifecycleEvent("session_created", "Session created", null);
     }
-  }, [sandboxId, recordLifecycleEvent]);
 
+    connectDesktop(restored.sandboxId);
+  }, [
+    activeSessionId,
+    connectDesktop,
+    recordLifecycleEvent,
+    setMessages,
+    takePendingRestore,
+  ]);
+
+  useEffect(scheduleFlush, [
+    scheduleFlush,
+    messages,
+    lifecycleEvents,
+    sandboxId,
+  ]);
+
+  // Kill desktop on page close. Registered once and reading the sandbox id from
+  // a ref: a dependency on `sandboxId` would make the cleanup fire on every
+  // reconnect and on every session switch, killing a desktop that just started.
   useEffect(() => {
-    if (recordedSessionStartRef.current) return;
-    recordedSessionStartRef.current = true;
-    recordLifecycleEvent("session_created", "Session created", null);
-  }, [recordLifecycleEvent]);
-
-  // Kill desktop on page close
-  useEffect(() => {
-    if (!sandboxId) return;
-
-    // Function to kill the desktop - just one method to reduce duplicates
     const killDesktop = () => {
-      if (!sandboxId) return;
+      const id = sandboxIdRef.current;
+      if (!id) return;
 
-      // Use sendBeacon which is best supported across browsers
-      navigator.sendBeacon(
-        `/api/kill-desktop?sandboxId=${encodeURIComponent(sandboxId)}`,
-      );
+      killSandbox(id);
       // Fires on unload, so this rarely gets to paint — it exists so a session
       // that survives (bfcache restore) still shows why the desktop went away.
-      recordLifecycleEvent("sandbox_killed", "Desktop killed", sandboxId);
+      recordLifecycleEvent("sandbox_killed", "Desktop killed", id);
     };
 
     // Detect iOS / Safari
@@ -272,49 +414,70 @@ export default function Chat() {
         killDesktop();
       };
     }
-  }, [sandboxId, recordLifecycleEvent]);
+  }, [recordLifecycleEvent]);
 
-  useEffect(() => {
-    // Initialize desktop and get stream URL when the component mounts
-    const init = async () => {
-      try {
-        setIsInitializing(true);
-
-        // Use the provided ID or create a new one
-        const { streamUrl, id } = await getDesktopURL(sandboxId ?? undefined);
-
-        setStreamUrl(streamUrl);
-        setSandboxId(id);
-        recordLifecycleEvent("sandbox_created", "Desktop created", id);
-      } catch (err) {
-        console.error("Failed to initialize desktop:", err);
-        recordLifecycleEvent(
-          "sandbox_error",
-          "Desktop initialization failed",
-          sandboxId,
-          err instanceof Error ? err.message : String(err),
-        );
-        toast.error("Failed to initialize desktop");
-      } finally {
-        setIsInitializing(false);
-      }
-    };
-
-    init();
+  /**
+   * Switching mid-run aborts it first. `sanitiseMessagesForStorage` would repair
+   * a dangling `tool_use` on write anyway, but the request itself has to stop:
+   * its result would otherwise land in `useChat`'s entry for the session being
+   * left, after that session was written out.
+   */
+  const handleSelectSession = useCallback(
+    (nextSessionId: string) => {
+      if (nextSessionId === activeSessionId) return;
+      if (isLoading) stop();
+      setIsSessionListOpen(false);
+      selectSession(nextSessionId);
+    },
+    // `stop` is rebuilt every render by design (it closes over `messages`), so
+    // it is read through the call rather than depended on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeSessionId, isLoading, selectSession],
+  );
+
+  /**
+   * Below `xl` a selection has somewhere to go: the inspector is its own docked
+   * section, so opening it is what "select" means there. Deselecting leaves the
+   * section open on its empty state rather than collapsing the strip under the
+   * user's finger.
+   */
+  const handleSelectEventInDock = useCallback((eventId: string | null) => {
+    setSelectedEventId(eventId);
+    if (eventId) setOpenDock("inspector");
   }, []);
+
+  const toggleDock = useCallback(
+    (dock: DockName) => setOpenDock((open) => (open === dock ? null : dock)),
+    [],
+  );
+
+  const handleCreateSession = useCallback(() => {
+    if (isLoading) stop();
+    setIsSessionListOpen(false);
+    createSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createSession, isLoading]);
+
+  const handleDeleteSession = useCallback(
+    (sessionId: string) => {
+      if (sessionId === activeSessionId && isLoading) stop();
+      const orphanedSandboxId = deleteSession(sessionId);
+      // Deleting a session the user is not in leaves a desktop nobody owns.
+      if (orphanedSandboxId) killSandbox(orphanedSandboxId);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeSessionId, deleteSession, isLoading],
+  );
 
   return (
     <div className="flex h-dvh relative">
-      {/* Mobile/tablet banner */}
-      <div className="flex items-center justify-center fixed left-1/2 -translate-x-1/2 top-5 shadow-md text-xs mx-auto rounded-lg h-8 w-fit bg-blue-600 text-white px-3 py-2 text-left z-50 xl:hidden">
-        <span>Headless mode</span>
-      </div>
-
       {/* Resizable Panels */}
-      <div className="w-full hidden xl:block">
+      <div className="hidden min-w-0 flex-1 xl:block">
         <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Chat: the transcript, the composer and the debug panel */}
+          {/* Chat: the session rail, the transcript, the composer and the debug
+              panel. The rail lives inside this panel rather than beside it —
+              picking a conversation is part of the chat surface, so the group
+              stays the two panels the layout is about, chat left, VNC right. */}
           <ResizablePanel
             defaultSize={38}
             minSize={25}
@@ -322,45 +485,66 @@ export default function Chat() {
           >
             <ChatHeader />
 
-            <div
-              className="flex-1 space-y-6 py-4 overflow-y-auto px-4"
-              ref={desktopContainerRef}
-            >
-              {messages.map((message, i) => (
-                <PreviewMessage
-                  message={message}
-                  key={message.id}
-                  isLoading={isLoading}
-                  status={status}
-                  isLatestMessage={i === messages.length - 1}
-                  toolEvents={toolEventsById}
+            <div className="flex min-h-0 flex-1">
+              <SessionSidebar
+                sessions={sessions}
+                activeSessionId={activeSessionId}
+                onCreate={handleCreateSession}
+                onSelect={handleSelectSession}
+                onDelete={handleDeleteSession}
+                collapsed={isSessionRailCollapsed}
+                onToggleCollapsed={() =>
+                  setIsSessionRailCollapsed((collapsed) => !collapsed)
+                }
+                className={cn(
+                  "shrink-0 border-r border-border",
+                  isSessionRailCollapsed ? "w-12" : "w-48",
+                )}
+              />
+
+              <div className="flex min-w-0 flex-1 flex-col">
+                <div
+                  className="flex-1 space-y-6 py-4 overflow-y-auto px-4"
+                  ref={desktopContainerRef}
+                >
+                  {isRestoring ? <TranscriptSkeleton /> : null}
+                  {messages.map((message, i) => (
+                    <PreviewMessage
+                      message={message}
+                      key={message.id}
+                      isLoading={isLoading}
+                      status={status}
+                      isLatestMessage={i === messages.length - 1}
+                      toolEvents={toolEventsById}
+                      selectedEventId={selectedEventId}
+                      onSelectEvent={setSelectedEventId}
+                    />
+                  ))}
+                  <div ref={desktopEndRef} className="pb-2" />
+                </div>
+
+                <AgentEventPanel
+                  events={agentEvents}
+                  sandboxId={sandboxId}
+                  sessionId={activeSessionId ?? ""}
+                  chatStatus={status}
                   selectedEventId={selectedEventId}
-                  onSelectEvent={setSelectedEventId}
+                  onSelectEvent={selectAndRevealEvent}
                 />
-              ))}
-              <div ref={desktopEndRef} className="pb-2" />
-            </div>
 
-            <AgentEventPanel
-              events={agentEvents}
-              sandboxId={sandboxId}
-              sessionId={sessionId}
-              chatStatus={status}
-              selectedEventId={selectedEventId}
-              onSelectEvent={selectAndRevealEvent}
-            />
-
-            <div className="bg-background">
-              <form onSubmit={handleSubmit} className="p-4">
-                <Input
-                  handleInputChange={handleInputChange}
-                  input={input}
-                  isInitializing={isInitializing}
-                  isLoading={isLoading}
-                  status={status}
-                  stop={stop}
-                />
-              </form>
+                <div className="bg-background">
+                  <form onSubmit={handleSubmit} className="p-4">
+                    <Input
+                      handleInputChange={handleInputChange}
+                      input={input}
+                      isInitializing={isInitializing}
+                      isLoading={isLoading}
+                      status={status}
+                      stop={stop}
+                    />
+                  </form>
+                </div>
+              </div>
             </div>
           </ResizablePanel>
 
@@ -374,11 +558,13 @@ export default function Chat() {
                 minSize={30}
                 className="bg-black relative items-center justify-center"
               >
-                <DesktopPanel
-                  streamUrl={streamUrl}
-                  isInitializing={isInitializing}
-                  onRefresh={refreshDesktop}
-                />
+                {isWide ? (
+                  <DesktopPanel
+                    streamUrl={streamUrl}
+                    isInitializing={isInitializing}
+                    onRefresh={refreshDesktop}
+                  />
+                ) : null}
               </ResizablePanel>
 
               <ResizableHandle withHandle />
@@ -397,14 +583,34 @@ export default function Chat() {
         </ResizablePanelGroup>
       </div>
 
-      {/* Mobile View (Chat Only) */}
+      {/* Below `xl`: one column, with the desktop and the event log docked
+          under it as mutually exclusive sections. */}
       <div className="w-full xl:hidden flex flex-col bg-background">
-        <ChatHeader />
+        <ChatHeader onToggleSessions={() => setIsSessionListOpen((open) => !open)} />
+
+        {/* No room for a rail here, so the same component becomes a drawer. */}
+        {isSessionListOpen ? (
+          <div className="fixed inset-0 z-40 xl:hidden">
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => setIsSessionListOpen(false)}
+            />
+            <SessionSidebar
+              sessions={sessions}
+              activeSessionId={activeSessionId}
+              onCreate={handleCreateSession}
+              onSelect={handleSelectSession}
+              onDelete={handleDeleteSession}
+              className="absolute inset-y-0 left-0 w-64 border-r border-border bg-background shadow-lg"
+            />
+          </div>
+        ) : null}
 
         <div
           className="flex-1 space-y-6 py-4 overflow-y-auto px-4"
           ref={mobileContainerRef}
         >
+          {isRestoring ? <TranscriptSkeleton /> : null}
           {messages.map((message, i) => (
             <PreviewMessage
               message={message}
@@ -414,35 +620,52 @@ export default function Chat() {
               isLatestMessage={i === messages.length - 1}
               toolEvents={toolEventsById}
               selectedEventId={selectedEventId}
-              onSelectEvent={setSelectedEventId}
+              onSelectEvent={handleSelectEventInDock}
             />
           ))}
           <div ref={mobileEndRef} className="pb-2" />
         </div>
 
-        {/* No desktop panel to dock under here, so the inspector takes over the
-            space above the event panel while something is selected. */}
-        {selectedEvent ? (
-          <div className="relative max-h-[45dvh] overflow-y-auto border-t border-border">
-            <button
-              type="button"
-              onClick={() => setSelectedEventId(null)}
-              className="absolute right-3 top-3 z-10 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground"
-            >
-              Close
-            </button>
-            <EventInspector event={selectedEvent} payload={selectedPayload} />
-          </div>
+        {!isWide ? (
+          <DesktopDock
+            isOpen={openDock === "desktop"}
+            onToggle={() => toggleDock("desktop")}
+            isInitializing={isInitializing}
+            isConnected={Boolean(streamUrl)}
+          >
+            <DesktopPanel
+              streamUrl={streamUrl}
+              isInitializing={isInitializing}
+              onRefresh={refreshDesktop}
+            />
+          </DesktopDock>
         ) : null}
 
         <AgentEventPanel
           events={agentEvents}
           sandboxId={sandboxId}
-          sessionId={sessionId}
+          sessionId={activeSessionId ?? ""}
           chatStatus={status}
           selectedEventId={selectedEventId}
-          onSelectEvent={selectAndRevealEvent}
+          onSelectEvent={handleSelectEventInDock}
+          isOpen={openDock === "events"}
+          onToggle={() => toggleDock("events")}
         />
+
+        <DockSection
+          icon={SquareDashedMousePointer}
+          title="Event details"
+          isOpen={openDock === "inspector"}
+          onToggle={() => toggleDock("inspector")}
+          bodyClassName="overflow-y-auto"
+          barContent={
+            <span className="ml-auto truncate pr-2 text-[11px] text-muted-foreground">
+              {selectedEvent ? describeEvent(selectedEvent).label : "nothing selected"}
+            </span>
+          }
+        >
+          <EventInspector event={selectedEvent} payload={selectedPayload} />
+        </DockSection>
 
         <div className="bg-background">
           <form onSubmit={handleSubmit} className="p-4">
