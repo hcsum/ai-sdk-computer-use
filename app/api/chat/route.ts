@@ -24,6 +24,10 @@ export async function POST(req: Request) {
         "Be sure to advise the user when waiting is necessary. " +
         "If the browser opens with a setup wizard, YOU MUST IGNORE IT and move straight to the next step (e.g. input the url in the search bar).",
       messages: prunedMessages(messages),
+      // The shared gateway drops channels intermittently, and its 503 clears on
+      // its own within a second or two. Five attempts with the SDK's exponential
+      // backoff absorb most of those before the user ever sees a toast.
+      maxRetries: 4,
       tools: { computer: computerTool(sandboxId), bash: bashTool(sandboxId) },
       providerOptions: {
         anthropic: { cacheControl: { type: "ephemeral" } },

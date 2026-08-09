@@ -32,7 +32,7 @@ type DockBarProps = {
 /**
  * The bar every docked section wears.
  *
- * Below `xl` the desktop, the event log and the inspector are peers competing
+ * Below `lg` the desktop, the event log and the inspector are peers competing
  * for the same strip of screen, and only one of them is open at a time. That
  * rule is only legible if they are visibly the same kind of thing, which is why
  * the bar is a shared component rather than three that happen to match.

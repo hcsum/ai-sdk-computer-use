@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { ArrowUp } from "lucide-react";
 import { Input as ShadcnInput } from "./ui/input";
 import { cn } from "@/lib/utils";
@@ -20,10 +21,22 @@ export const Input = ({
   stop,
 }: InputProps) => {
   const isDisabled = isLoading || isInitializing;
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Sending a message disables the field, which drops focus. Take it back the
+  // moment typing is possible again so the next message needs no click. Two of
+  // these render at once (mobile and desktop); `focus()` on the hidden one is a
+  // no-op, so only the visible field actually takes it.
+  useEffect(() => {
+    if (!isDisabled) {
+      inputRef.current?.focus();
+    }
+  }, [isDisabled]);
 
   return (
     <div className="relative w-full">
       <ShadcnInput
+        ref={inputRef}
         className={cn(
           "py-6 w-full rounded-xl pr-12 transition-colors",
           // Enabled is a clean white field you type into; disabled fills with
