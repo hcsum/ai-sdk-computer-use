@@ -5,6 +5,7 @@ import {
   countActions,
   deriveAgentStatus,
   filterEvents,
+  isFailedEvent,
   summarizeEvents,
 } from "./agent-event-stats";
 
@@ -41,6 +42,26 @@ const lifecycle = (
   type,
   label: type,
   detail,
+});
+
+describe("an aborted call is an outcome, not a failure", () => {
+  const aborted = computer("a", "screenshot", {
+    status: "aborted",
+    error: "User aborted",
+  });
+
+  it("is not a failed event", () => {
+    expect(isFailedEvent(aborted)).toBe(false);
+  });
+
+  it("does not leave the agent in an error state", () => {
+    expect(deriveAgentStatus([aborted], "ready")).toBe("idle");
+  });
+
+  it("is not counted as a failure, and is not in the errors filter", () => {
+    expect(summarizeEvents([aborted]).failed).toBe(0);
+    expect(filterEvents([aborted], "errors")).toEqual([]);
+  });
 });
 
 describe("deriveAgentStatus", () => {

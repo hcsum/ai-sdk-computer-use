@@ -4,6 +4,8 @@ Where the dashboard stands, what is deliberately not built yet, and the things
 that will waste an hour if nobody writes them down. Read
 [`event-model.md`](./event-model.md) first — it is the spec this implementation
 answers to, and it was written before any of the pipeline existed.
+[`performance.md`](./performance.md) answers the two speed questions: why a
+restored session takes a moment to paint, and what happens to a long list.
 
 Last updated: 2026-08-09.
 
@@ -24,11 +26,20 @@ thing to do.
 Verified on `feat/sessions`: `pnpm test` (64 passed), `pnpm exec tsc --noEmit`,
 `pnpm lint`, `pnpm build`, plus a manual run against a live sandbox.
 
-One gap in that manual run, worth closing before the video: nobody has yet
-driven a switch *mid-stream*, or returned to a session whose sandbox had already
-expired. Both paths are implemented and both are the kind that fail quietly —
-the first can only misplace a tool result, the second is where a 400 from a
-badly sanitised transcript would surface.
+The two quiet paths have since been driven by hand, and both hold:
+
+- **Switch mid-stream, switch back, send again.** The interrupted run stops, the
+  session resumes and continues normally. That last send is the test — a
+  dangling `tool_use` surfaces as a 400 on the *next* request, never at the
+  moment of switching.
+- **Reload, open an old session, keep talking.** The redacted transcript is
+  still accepted, so `sanitiseMessagesForStorage` preserves enough protocol
+  structure.
+
+What that run did *not* prove: the sandbox was likely still alive, so
+`getDesktop`'s reconnect-or-recreate branch may not have been exercised. Not a
+protocol risk — the worst case is a long spin before a fresh VM. Confirm it by
+killing the VM in Vercel, or by returning to a session the next day.
 
 Merges are merge commits, not squashes, deliberately: the brief says the
 incremental commits are reviewed, and squashing destroys exactly that.
@@ -192,6 +203,11 @@ Still worth knowing:
   the deployed app and miss it.
 - **Turn events carry no message content.** The line the event model draws is
   content, not existence — see the commit message on `fa5a7ae`.
+- **Settled messages render with `Streamdown mode="static"`, only the streaming
+  one uses `mode="streaming"`.** Not a micro-optimisation: the streaming mode
+  renders empty on first commit and fills from a `startTransition`, which a
+  pending Server Action can stall for seconds. See
+  [`performance.md`](./performance.md).
 - **`app/page.tsx` is not yet split into `ChatWorkspace` / `DesktopPanel`
   containers.** `DesktopPanel` is extracted and memoised, which establishes the
   invariant; the provider-placement argument in `event-model.md` only becomes

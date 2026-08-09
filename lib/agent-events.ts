@@ -2,7 +2,14 @@ import type { Message } from "ai";
 
 import { ABORTED } from "./utils";
 
-export type ToolEventStatus = "pending" | "complete" | "error";
+/**
+ * `aborted` is its own status rather than a flavour of `error`: the user
+ * pressing stop is the system doing what it was told, and folding it into
+ * `error` turns a deliberate act into a red status dot and a phantom entry in
+ * the failure count. The cause still travels in `error` so the row can say
+ * *why* it stopped.
+ */
+export type ToolEventStatus = "pending" | "complete" | "aborted" | "error";
 
 type ToolEventCommon = {
   kind: "tool";
@@ -127,11 +134,13 @@ const asRecord = (value: unknown): Record<string, unknown> =>
 const asString = (value: unknown) => (typeof value === "string" ? value : undefined);
 
 const resultLooksLikeError = (result: unknown) => {
-  if (result === ABORTED) return true;
   if (!result || typeof result !== "object") return false;
   const candidate = result as { ok?: unknown; error?: unknown };
   return candidate.ok === false || Boolean(candidate.error);
 };
+
+const settledStatus = (result: unknown): ToolEventStatus =>
+  result === ABORTED ? "aborted" : resultLooksLikeError(result) ? "error" : "complete";
 
 const getExecutionMeta = (result: unknown) => {
   if (result === ABORTED) return { error: ABORTED };
@@ -235,11 +244,7 @@ export const createToolEventProjector = (now = () => new Date().toISOString()) =
           messageId: message.id,
           order: messageIndex * 1000 + partIndex + 1,
           timestamp: meta.startedAt ?? provisionalStart,
-          status: isResult
-            ? resultLooksLikeError(result)
-              ? "error"
-              : "complete"
-            : "pending",
+          status: isResult ? settledStatus(result) : "pending",
           ...meta,
         };
 

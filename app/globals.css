@@ -125,6 +125,15 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Tailwind v4 dropped the preflight rule that gave buttons a pointer cursor,
+     which leaves every control in the app feeling inert. Restored here rather
+     than by adding `cursor-pointer` to each call site, where it is one class
+     away from being forgotten on the next control someone adds. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  summary {
+    @apply cursor-pointer;
+  }
 }
 
 /* Hide scrollbar for Chrome, Safari and Opera */

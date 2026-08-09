@@ -41,6 +41,23 @@ export type LiveSessionState = {
 export type SessionsApi = {
   sessions: SessionMeta[];
   activeSessionId: string | null;
+  /**
+   * Whether the transcript on screen is a placeholder rather than the truth.
+   * Nothing is being fetched — reading a session out of localStorage costs
+   * fractions of a millisecond — but two gaps are still visible:
+   *
+   * - **Before bootstrap.** `localStorage` does not exist during SSR, so the
+   *   server can only render an empty conversation, and the effect that knows
+   *   better cannot run until the page has hydrated. On a cold load that is the
+   *   long one, and it is time-to-interactive, not IO.
+   * - **Between activation and restore.** One render, because `useChat` keys
+   *   its state on the session id — see `takePendingRestore`.
+   *
+   * Starts `true` so the first paint admits it does not know yet, and is
+   * lowered as soon as either gap closes. It is never raised for a session with
+   * no stored messages, so opening a fresh one shows an empty chat immediately.
+   */
+  isRestoring: boolean;
   createSession: () => void;
   selectSession: (sessionId: string) => void;
   /** Returns the deleted session's sandbox id, if it had one, for cleanup. */
@@ -85,6 +102,10 @@ export const useSessions = (
 ): SessionsApi => {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  // True until bootstrap proves otherwise: the server rendered an empty chat
+  // because it had no way to read storage, and claiming that is the
+  // conversation would be a lie for as long as hydration takes.
+  const [isRestoring, setIsRestoring] = useState(true);
 
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeSessionId;
@@ -130,6 +151,7 @@ export const useSessions = (
         lifecycleEvents: [],
         sandboxId: null,
       };
+      setIsRestoring(body ? body.messages.length > 0 : false);
       setActiveSessionId(sessionId);
     },
     [],
@@ -199,6 +221,9 @@ export const useSessions = (
   const takePendingRestore = useCallback(() => {
     const pending = pendingRestoreRef.current;
     pendingRestoreRef.current = null;
+    // Batched with the consumer's `setMessages`, so the placeholder and the
+    // transcript it stands in for swap in the same commit.
+    setIsRestoring(false);
     return pending;
   }, []);
 
@@ -242,6 +267,7 @@ export const useSessions = (
   return {
     sessions,
     activeSessionId,
+    isRestoring,
     createSession,
     selectSession,
     deleteSession,

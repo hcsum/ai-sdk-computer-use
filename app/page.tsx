@@ -49,6 +49,29 @@ const ChatHeader = ({ onToggleSessions }: { onToggleSessions?: () => void }) => 
   </div>
 );
 
+/**
+ * Stands in for a stored transcript during the single render between a session
+ * becoming active and `setMessages` applying it. An empty conversation and a
+ * conversation that has not been painted yet look identical otherwise, and the
+ * first one is a lie.
+ */
+const TranscriptSkeleton = () => (
+  <div className="space-y-6" aria-busy="true" aria-label="Restoring conversation">
+    {[70, 45, 60].map((width, index) => (
+      <div
+        key={width}
+        className={cn("flex flex-col gap-2", index % 2 === 1 && "items-end")}
+      >
+        <div className="h-4 w-24 animate-pulse rounded bg-muted" />
+        <div
+          className="h-16 animate-pulse rounded-xl bg-muted"
+          style={{ width: `${width}%` }}
+        />
+      </div>
+    ))}
+  </div>
+);
+
 const killSandbox = (sandboxId: string) => {
   // `sendBeacon` because this also has to work from an unload handler.
   navigator.sendBeacon(`/api/kill-desktop?sandboxId=${encodeURIComponent(sandboxId)}`);
@@ -87,6 +110,7 @@ export default function Chat() {
   const {
     sessions,
     activeSessionId,
+    isRestoring,
     createSession,
     selectSession,
     deleteSession,
@@ -456,6 +480,7 @@ export default function Chat() {
                   className="flex-1 space-y-6 py-4 overflow-y-auto px-4"
                   ref={desktopContainerRef}
                 >
+                  {isRestoring ? <TranscriptSkeleton /> : null}
                   {messages.map((message, i) => (
                     <PreviewMessage
                       message={message}
@@ -555,6 +580,7 @@ export default function Chat() {
           className="flex-1 space-y-6 py-4 overflow-y-auto px-4"
           ref={mobileContainerRef}
         >
+          {isRestoring ? <TranscriptSkeleton /> : null}
           {messages.map((message, i) => (
             <PreviewMessage
               message={message}
