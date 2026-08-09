@@ -9,19 +9,20 @@ Last updated: 2026-08-09.
 
 ## State
 
-`main` carries everything through PR #4. Nothing in flight; the working tree is
-clean.
+`main` carries everything through PR #4. Sessions are on `feat/sessions`.
 
 ```text
 #1  feat: portable model access and a relay-safe tool layer
 #2  docs: event model spec for the agent pipeline
 #3  feat: typed agent event pipeline with a live timeline panel
 #4  feat: turn the event timeline into an inspectable dashboard
+    feat: multiple sessions, persisted to localStorage   ← feat/sessions
 ```
 
-Verified on `main`: `pnpm test` (51 passed), `pnpm exec tsc --noEmit`,
-`pnpm lint`, `pnpm build`, plus a manual run against a live sandbox. The
-intermediate commits were not each built.
+Verified on `feat/sessions`: `pnpm test` (64 passed), `pnpm exec tsc --noEmit`,
+`pnpm lint`, `pnpm build`. **Not yet driven against a live sandbox** — the
+session paths that most want a real run are switching mid-stream and returning
+to a session whose sandbox has expired.
 
 Merges are merge commits, not squashes, deliberately: the brief says the
 incremental commits are reviewed, and squashing destroys exactly that.
@@ -39,9 +40,13 @@ lib/agent-events.ts        messages ──▶ ToolEvent[] + TurnEvent[]
 lib/agent-event-stats.ts   events ──▶ agent status, action counts, totals, filters
 lib/tool-event-display.ts  event  ──▶ words and an icon, at two densities
 
-components/message.tsx           transcript      narrative, inline in the chat
-components/agent-event-panel.tsx debug panel     aggregates + the flat log
-components/event-inspector.tsx   inspector       one event's raw payload
+lib/session-store.ts       localStorage: index + one key per session
+lib/use-sessions.ts        create / switch / delete, debounced persistence
+
+components/message.tsx            transcript      narrative, inline in the chat
+components/agent-event-panel.tsx  debug panel     aggregates + the flat log
+components/event-inspector.tsx    inspector       one event's raw payload
+components/session-sidebar.tsx    session rail    rail on xl, drawer below it
 ```
 
 Colours go through the semantic tokens in `app/globals.css`; `next-themes`
@@ -61,6 +66,15 @@ Three facts worth not rediscovering:
 - **`DesktopPanel` must stay off the chat state's ancestor chain.** `memo` is
   necessary but not sufficient — a context whose value changes per token defeats
   it, and the iframe remounting drops the VNC connection mid-run.
+- **There is no in-memory map of sessions.** `useChat` owns the active
+  transcript, keyed on `sessionId`; storage owns the rest. Switching is always
+  flush-then-restore, so a switch and a reload take the same path — screenshot
+  redaction included, which is why a session you come back to shows redacted
+  placeholders where its screenshots were.
+- **A restore has to land in an effect on `activeSessionId`, never in the switch
+  handler.** `useChat` keys its state on that id, so a `setMessages` issued
+  before the render that carries the new id writes the incoming transcript into
+  the session being left.
 
 ## Against the brief
 
@@ -76,62 +90,73 @@ Three facts worth not rediscovering:
 | Debug panel visualising the event store | done, with filters |
 | No `any`, discriminated unions | done |
 | VNC does not re-render on chat updates | done, `DesktopPanel` |
-| **Multiple sessions: create, switch, delete** | **not started** |
-| **Persist to localStorage** | **not started** |
+| Multiple sessions: create, switch, delete | done, `lib/use-sessions.ts` |
+| Persist to localStorage | done, `lib/session-store.ts` |
 | Mobile-responsive (bonus) | partial — below `xl` the desktop panel is dropped and the app runs headless |
 | Light / dark / system theme | done, `components/theme-toggle.tsx` |
 | README, deployment, demo video | **not done** — see Next |
 
 ## Next
 
-In order. The first item is the only remaining hard requirement in the brief;
-the rest are deliverables, and the video cannot be recorded before sessions
-exist because it has to show a session switch.
+Every hard requirement in the brief is now met; what is left is deliverables.
 
-1. **Sessions** — the `Session` aggregate, a sidebar to create / switch /
-   delete, and localStorage persistence. One milestone, one PR. The trap is
-   below; read it before writing the serialiser.
-2. **README** — the Features section is still the upstream demo's. It has to
+1. **README** — the Features section is still the upstream demo's. It has to
    describe *this* app: the two-panel dashboard, the event pipeline, the
    inspector, sessions. Add a screenshot. This is the reviewer's first stop and
    the whole of the Documentation score, so it should read in 60 seconds, not
    be another essay.
-3. **Deploy** to Vercel and put the URL in the README. Needs `ANTHROPIC_*`,
+2. **Deploy** to Vercel and put the URL in the README. Needs `ANTHROPIC_*`,
    `SANDBOX_SNAPSHOT_ID` and the Vercel Sandbox credentials set as project env
    vars — the OIDC token that works locally is not what production uses.
-4. **Demo video**, 5 minutes with sound: layout and resizing, the debug panel,
+3. **Demo video**, 5 minutes with sound: layout and resizing, the debug panel,
    "What's the weather in Dubai?" end to end, a session switch, then the code
    tour — the projection, the discriminated union, the `DesktopPanel` memo.
-5. **Invite** `lingjiekong`, `ghamry03`, `goldmermaid`, `EnergentAI` to the
+4. **Invite** `lingjiekong`, `ghamry03`, `goldmermaid`, `EnergentAI` to the
    repository.
 
 Not required and not worth starting: splitting `app/page.tsx` into containers,
 testing the memo invariant, a desktop view below `xl`.
 
-## The trap inside sessions
+## The trap inside sessions, and where it is handled
 
-Persistence activates a failure that cannot happen today.
+Persistence activates a failure that cannot happen without it, so the guard is
+in one place: `sanitiseMessagesForStorage` in `lib/session-store.ts`.
 
 `event-model.md` requires that sanitising messages for storage **replaces content
 but preserves protocol structure**. Anthropic rejects any `tool_use` without a
 matching `tool_result` with a 400. Dropping a screenshot part, or its `result`
 field, to save quota therefore breaks the conversation — and it breaks it
 silently at write time, surfacing much later as a 400 the first time someone
-returns to an old session and sends a message. `prunedMessages` in `lib/utils.ts`
-already establishes the correct pattern: swap the image payload for text, keep
-the envelope, the part and the `toolCallId`. That exact bug was already fixed
-once, in commit `9045093`.
+returns to an old session and sends a message. That exact bug was already fixed
+once on the request path, in commit `9045093`.
 
-Two smaller rules from the spec that currently have no object and will need one:
+So the sanitiser swaps only the image payload inside `data`, keeping the part,
+the `toolCallId`, the `result` field and the `ok: true` envelope. It also closes
+any call still at `state: "call"` with an aborted result: a session gets written
+while a run may be in flight, and a dangling `tool_use` is the same 400 waiting
+to happen. Both rules are covered by `lib/session-store.test.ts` — if you change
+that function, those tests are the reason it is safe.
 
-- `selectedEventId` must be session-scoped, or cleared on switch. A bare
-  `toolCallId` can name an event in a different session after a switch.
-- `session_switched` is not a session lifecycle event. Recording a cross-session
-  action under either side is arbitrary; it belongs in an app-level log or
-  nowhere.
+The two smaller rules from the spec now have objects:
 
-Also open, smaller: the `Session` aggregate itself (title, timestamps) does not
-exist — `sessionId` is generated once on mount in `app/page.tsx`.
+- `selectedEventId` is cleared on switch, in the restore effect. A bare
+  `toolCallId` can otherwise name an event in a different session.
+- `session_switched` is not recorded anywhere. Recording a cross-session action
+  under either side is arbitrary.
+
+Still worth knowing:
+
+- **Switching kills the outgoing sandbox.** The Hobby plan allows ten
+  concurrent, and the outgoing session has already been flushed, so the kill
+  cannot be recorded against it. Returning to that session reconnects if the VM
+  happens to be alive and otherwise creates a fresh one — `getDesktop` decides,
+  from the stored `sandboxId` being a hint rather than identity.
+- **Quota eviction drops bodies, not index entries.** An evicted session still
+  lists and still opens; it opens empty. Losing the row would look like data
+  loss, and opening empty at least says what happened.
+- **Sessions are not synced across tabs.** Two tabs each flush their own active
+  session and last write wins on the index. Out of scope for the brief; a
+  `storage` event listener is where it would start.
 
 ## Operational notes
 
