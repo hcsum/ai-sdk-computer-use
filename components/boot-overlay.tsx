@@ -21,9 +21,6 @@ export const BootOverlay = () => (
       <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
       <div className="text-left">
         <p className="text-sm font-medium text-foreground">Starting your desktop…</p>
-        <p className="text-xs text-muted-foreground">
-          You can type once it&apos;s ready.
-        </p>
       </div>
     </div>
   </div>
