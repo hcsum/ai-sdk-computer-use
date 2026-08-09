@@ -8,14 +8,17 @@ import { cn } from "@/lib/utils";
 const OPEN_HEIGHT = "h-[52dvh]";
 
 /**
- * An open section floats over the chat rather than continuing it, and a tint
- * alone does not say so: `--muted` sits 3% off `--background` in light mode, so
- * the seam between the log and the last message all but disappears. The cast
- * shadow is what carries the separation — it reads as a layer edge at any
- * contrast — with the tint and border reinforcing it.
+ * An open section is a different surface from the chat, not a continuation of
+ * it. `--muted` cannot say that — it sits 3% off `--background` in light mode,
+ * so the seam against the last message all but disappears.
+ *
+ * Raw zinc rather than a semantic token because the palette has none for a
+ * recessed surface: every neutral it defines sits within a few percent of
+ * `--background`. Each mode moves away from the page in its own direction —
+ * light goes down to zinc-200, dark goes past the background to black — so the
+ * cards inside, which stay `bg-background`, read as raised in both.
  */
-const OPEN_SURFACE =
-  "bg-muted shadow-[0_-10px_30px_-12px_rgb(0_0_0/0.18)] dark:shadow-[0_-10px_30px_-8px_rgb(0_0_0/0.6)]";
+const OPEN_SURFACE = "bg-zinc-200/80 dark:bg-black";
 
 type DockBarProps = {
   icon: LucideIcon;
@@ -79,8 +82,6 @@ export function DockSection({
   return (
     <aside
       className={cn(
-        // `relative z-10` so the cast shadow lands on the transcript above
-        // rather than being painted under it.
         "relative z-10 flex shrink-0 flex-col overflow-hidden border-t border-border bg-muted/40",
         // Fixed rather than capped, so a section occupies the same space no
         // matter what is inside it — a height that tracks its contents moves
