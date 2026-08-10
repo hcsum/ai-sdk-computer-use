@@ -112,4 +112,6 @@ Required environment is documented in `.env.example`: `ANTHROPIC_API_KEY`, `SAND
 
 ## Known Limitation
 
-Against a shared relay (`ANTHROPIC_BASE_URL`), the gateway intermittently returns a 503 reading `无可用渠道 / no available channel`: no upstream slot for that model at that instant. Requests retry with backoff; if all attempts fail, the UI offers Retry and records the response as a `chat_error` event.
+The hosted demo uses a shared Claude relay. It can intermittently return a 503 reading `无可用渠道 / no available channel` when no upstream slot is available for the model. In development this usually cleared immediately or within a few minutes. Requests retry with backoff; if all attempts fail, the UI offers Retry and records the full response as a `chat_error` event.
+
+If the hosted demo hits this during review, wait a few seconds and retry. The repo can also be run locally with an official Anthropic key by setting `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL=https://api.anthropic.com/v1`, and `COMPUTER_TOOL_MODE=native`.
