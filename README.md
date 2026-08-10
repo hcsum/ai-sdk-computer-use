@@ -3,7 +3,7 @@ Author: Haochen Xu
 # AI SDK Computer Use Dashboard
 
 Live: https://ai-agent-dashboard-three-steel.vercel.app/  
-Demo: TBD
+Demo: [`demo.mp4`](./demo.mp4)
 
 ## Code Map
 
