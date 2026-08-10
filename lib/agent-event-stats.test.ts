@@ -132,7 +132,6 @@ describe("summarizeEvents", () => {
       toolCalls: 3,
       pending: 1,
       failed: 2,
-      totalDurationMs: 210,
     });
   });
 });

@@ -212,15 +212,13 @@ export function AgentEventPanel({
                 value={sandboxId ?? "none"}
                 copyable={Boolean(sandboxId)}
               />
-              <Stat
-                label="VM time"
-                value={formatDuration(summary.totalDurationMs) ?? "0ms"}
-              />
-              <Stat label="Events" value={String(events.length)} />
             </div>
 
-            {actions.length > 0 ? (
+            {events.length > 0 || actions.length > 0 ? (
               <div className="mb-3 flex flex-wrap gap-1">
+                <span className="rounded-full border border-border bg-background px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+                  events ×{events.length}
+                </span>
                 {actions.map(({ action, count }) => (
                   <span
                     key={action}

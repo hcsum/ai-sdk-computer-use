@@ -77,25 +77,21 @@ export type EventSummary = {
   toolCalls: number;
   pending: number;
   failed: number;
-  /** Server-measured VM time only — model latency is not in here. */
-  totalDurationMs: number;
 };
 
 export const summarizeEvents = (events: AgentEvent[]): EventSummary => {
   let toolCalls = 0;
   let pending = 0;
   let failed = 0;
-  let totalDurationMs = 0;
 
   for (const event of events) {
     if (isFailedEvent(event)) failed += 1;
     if (event.kind !== "tool") continue;
     toolCalls += 1;
     if (event.status === "pending") pending += 1;
-    totalDurationMs += event.durationMs ?? 0;
   }
 
-  return { toolCalls, pending, failed, totalDurationMs };
+  return { toolCalls, pending, failed };
 };
 
 export const EVENT_FILTERS = ["all", "tools", "chat", "lifecycle", "errors"] as const;
