@@ -176,7 +176,7 @@ export default function Chat() {
         isUpstream ? "The model provider is busy" : "The model request failed",
         {
           description: isUpstream
-            ? "The upstream API gateway had no channel available for this model. Nothing is wrong with your session — retry in a moment. Full response is in the event log."
+            ? "The Claude relay I use for this demo is temporarily out of available channels. I saw this a few times during development, and it usually clears on its own right away or within a few minutes. Please try again now, retry in a few seconds, or run the repo locally with your own official Anthropic key. I also tried GLM as a fallback, but it was too expensive for this demo."
             : reason,
           richColors: true,
           position: "top-center",
