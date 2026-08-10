@@ -1,13 +1,11 @@
 Author: Haochen Xu
 
-# AI Agent Dashboard
-
-Production frontend extension of `vercel-labs/ai-sdk-computer-use`: chat on the left, live VNC on the right, typed agent events, inspectable tool calls and persistent multi-session history.
+# AI SDK Computer Use Dashboard
 
 Live: https://ai-agent-dashboard-three-steel.vercel.app/  
 Demo: TBD
 
-## What to Review
+## Code Map
 
 - Dashboard layout and session wiring: `app/page.tsx`
 - Inline tool call cards: `components/message.tsx`
@@ -48,7 +46,9 @@ flowchart LR
   EventsState --> Inspector
 ```
 
-There are two source-of-truth layers. At runtime, `useChat.messages` owns the active transcript. Across reloads and inactive sessions, `localStorage` owns the persisted session body: messages, lifecycle events and the current sandbox binding.
+There are two source-of-truth layers:
+- At runtime, `useChat.messages` owns the active transcript. 
+- Across reloads and inactive sessions, `localStorage` owns the persisted session body: messages, lifecycle events such as session creation, VM creation/reconnect/kill and chat errors, and the current sandbox binding.
 
 `AgentEvent[]` is a derived view over `messages + lifecycleEvents`, not a second transcript store. It feeds both the inline tool cards and the debug surfaces.
 
@@ -56,7 +56,7 @@ Event model in one pass:
 
 - Tool events are projected from `messages.parts[].toolInvocation`.
 - Turn events are projected from `messages`.
-- Lifecycle events are stored separately because AI SDK messages do not contain session or sandbox lifecycle facts.
+- Lifecycle events, such as session creation, VM creation/reconnect/kill and chat errors, are stored separately because AI SDK messages do not contain session or sandbox lifecycle facts.
 - Persisted sessions store `messages + lifecycleEvents + sandboxId`; restoring a session puts `messages` back into `useChat`.
 
 ## Key Decisions
