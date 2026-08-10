@@ -111,7 +111,7 @@ export const SessionSidebar = ({
           <CollapseButton collapsed onToggle={onToggleCollapsed} />
         ) : null}
         <NewSessionButton onCreate={onCreate} />
-        <div className="mt-1 flex w-full flex-1 flex-col items-center gap-1 overflow-y-auto">
+        <div className="flex w-full flex-1 flex-col items-center gap-1 overflow-y-auto pt-2">
           {sessions.map((session) => {
             const isActive = session.id === activeSessionId;
             return (
