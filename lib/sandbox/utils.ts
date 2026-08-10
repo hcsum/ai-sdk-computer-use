@@ -6,6 +6,17 @@ import { resolution } from "./tool";
 const NOVNC_PORT = 6080;
 const DISPLAY_ENV = { DISPLAY: ":99" };
 
+export type DesktopURLResult =
+  | { ok: true; streamUrl: string; id: string }
+  | { ok: false; error: string };
+
+const errorMessage = (error: unknown) => {
+  if (error instanceof Error) {
+    return error.message ? `${error.name}: ${error.message}` : error.name;
+  }
+  return typeof error === "string" ? error : "Unknown desktop connection error";
+};
+
 export const getDesktop = async (id?: string) => {
   try {
     if (id) {
@@ -95,16 +106,16 @@ async function waitForNoVNC(sandbox: Sandbox, maxRetries = 20) {
   console.warn("noVNC health check timed out, proceeding anyway");
 }
 
-export const getDesktopURL = async (id?: string) => {
+export const getDesktopURL = async (id?: string): Promise<DesktopURLResult> => {
   try {
     const sandbox = await getDesktop(id);
     const baseUrl = sandbox.domain(NOVNC_PORT);
     const streamUrl = `${baseUrl}/vnc.html?autoconnect=true&resize=scale&reconnect=true`;
 
-    return { streamUrl, id: sandbox.sandboxId };
+    return { ok: true, streamUrl, id: sandbox.sandboxId };
   } catch (error) {
     console.error("Error in getDesktopURL:", error);
-    throw error;
+    return { ok: false, error: errorMessage(error) };
   }
 };
 

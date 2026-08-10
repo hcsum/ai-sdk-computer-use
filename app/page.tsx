@@ -319,7 +319,23 @@ export default function Chat() {
     async (preferredId: string | null) => {
       try {
         setIsInitializing(true);
-        const { streamUrl, id } = await getDesktopURL(preferredId ?? undefined);
+        const desktop = await getDesktopURL(preferredId ?? undefined);
+        if (!desktop.ok) {
+          recordLifecycleEvent(
+            "sandbox_error",
+            "Desktop connection failed",
+            preferredId,
+            desktop.error,
+          );
+          toast.error("Failed to initialize desktop", {
+            description: desktop.error,
+            position: "top-center",
+            duration: 10000,
+          });
+          return;
+        }
+
+        const { streamUrl, id } = desktop;
         setStreamUrl(streamUrl);
         setSandboxId(id);
         recordLifecycleEvent(
