@@ -99,6 +99,48 @@ const carriesImage = (result: unknown) => {
   return (data as { type?: unknown }).type === "image";
 };
 
+const abortInvocation = (invocation: ToolInvocation): ToolInvocation =>
+  invocation.state === "result"
+    ? invocation
+    : { ...invocation, state: "result", result: ABORTED };
+
+const mapToolInvocations = (
+  messages: Message[],
+  transform: (invocation: ToolInvocation) => ToolInvocation,
+): Message[] =>
+  messages.map((message) => {
+    const next: Message = {
+      ...message,
+      parts: message.parts?.map((part) =>
+        isToolInvocationPart(part)
+          ? { ...part, toolInvocation: transform(part.toolInvocation) }
+          : part,
+      ),
+    } as Message;
+
+    if (message.toolInvocations) {
+      next.toolInvocations = message.toolInvocations.map(
+        (invocation) =>
+          transform(
+            invocation as unknown as ToolInvocation,
+          ) as unknown as NonNullable<Message["toolInvocations"]>[number],
+      );
+    }
+
+    return next;
+  });
+
+/**
+ * Stops a live transcript without making it a storage snapshot.
+ *
+ * `useChat.stop()` aborts the request, but it does not rewrite the already
+ * streamed tool invocation. A session switch has to leave the outgoing
+ * transcript resumable, so every non-result invocation becomes a normal
+ * `tool_result` whose value explains that the user aborted it.
+ */
+export const abortUnfinishedToolInvocations = (messages: Message[]): Message[] =>
+  mapToolInvocations(messages, abortInvocation);
+
 /**
  * Screenshot bytes must never reach storage — a single 1024x768 PNG is hundreds
  * of kilobytes and the whole origin gets a few megabytes.
@@ -119,9 +161,8 @@ const carriesImage = (result: unknown) => {
  * Pure: `messages` is live React state, so nothing here may mutate it.
  */
 const sanitiseInvocation = (invocation: ToolInvocation): ToolInvocation => {
-  if (invocation.state !== "result") {
-    return { ...invocation, state: "result", result: ABORTED };
-  }
+  const aborted = abortInvocation(invocation);
+  if (aborted !== invocation) return aborted;
 
   if (!carriesImage(invocation.result)) return invocation;
 
@@ -143,27 +184,7 @@ const sanitiseInvocation = (invocation: ToolInvocation): ToolInvocation => {
  * reached 1.3 MB. Both have to go through the same replacement.
  */
 export const sanitiseMessagesForStorage = (messages: Message[]): Message[] =>
-  messages.map((message) => {
-    const sanitised: Message = {
-      ...message,
-      parts: message.parts?.map((part) =>
-        isToolInvocationPart(part)
-          ? { ...part, toolInvocation: sanitiseInvocation(part.toolInvocation) }
-          : part,
-      ),
-    } as Message;
-
-    if (message.toolInvocations) {
-      sanitised.toolInvocations = message.toolInvocations.map(
-        (invocation) =>
-          sanitiseInvocation(
-            invocation as unknown as ToolInvocation,
-          ) as unknown as NonNullable<Message["toolInvocations"]>[number],
-      );
-    }
-
-    return sanitised;
-  });
+  mapToolInvocations(messages, sanitiseInvocation);
 
 const parse = <T,>(raw: string | null): T | null => {
   if (!raw) return null;

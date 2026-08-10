@@ -3,6 +3,7 @@ import type { Message } from "ai";
 
 import { ABORTED } from "./utils";
 import {
+  abortUnfinishedToolInvocations,
   deriveSessionTitle,
   readIndex,
   readSessionBody,
@@ -63,6 +64,55 @@ const invocationOf = (sanitised: Message[], index = 0) =>
   (sanitised[0].parts![index] as unknown as {
     toolInvocation: Record<string, unknown>;
   }).toolInvocation;
+
+describe("abortUnfinishedToolInvocations", () => {
+  it("settles every unfinished tool invocation without redacting completed results", () => {
+    const aborted = abortUnfinishedToolInvocations([
+      message([
+        toolPart({
+          toolCallId: "call-1",
+          toolName: "computer",
+          state: "call",
+          args: { action: "screenshot" },
+        }),
+        toolPart({
+          toolCallId: "call-2",
+          toolName: "computer",
+          state: "result",
+          args: { action: "screenshot" },
+          result: screenshotResult,
+        }),
+      ]),
+    ]);
+
+    expect(invocationOf(aborted, 0)).toMatchObject({
+      state: "result",
+      result: ABORTED,
+    });
+    expect(invocationOf(aborted, 1).result).toEqual(screenshotResult);
+  });
+
+  it("settles the legacy top-level toolInvocations as well", () => {
+    const invocation = {
+      toolCallId: "call-1",
+      toolName: "computer",
+      state: "call",
+      args: { action: "screenshot" },
+    };
+
+    const aborted = abortUnfinishedToolInvocations([
+      message([toolPart(invocation)], {
+        toolInvocations: [invocation] as unknown as Message["toolInvocations"],
+      }),
+    ]);
+
+    expect(invocationOf(aborted)).toMatchObject({ state: "result", result: ABORTED });
+    expect(aborted[0].toolInvocations![0]).toMatchObject({
+      state: "result",
+      result: ABORTED,
+    });
+  });
+});
 
 describe("sanitiseMessagesForStorage", () => {
   it("replaces screenshot bytes but keeps the protocol envelope", () => {

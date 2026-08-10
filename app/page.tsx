@@ -5,6 +5,7 @@ import { getDesktopURL } from "@/lib/sandbox/utils";
 import { useScrollToBottom } from "@/lib/use-scroll-to-bottom";
 import { useChat } from "@ai-sdk/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Input } from "@/components/input";
 import { toast } from "sonner";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -17,7 +18,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import type { ImperativePanelHandle } from "react-resizable-panels";
-import { ABORTED, cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import {
   agentEventKey,
   createToolEventProjector,
@@ -35,6 +36,7 @@ import { SessionSidebar } from "@/components/session-sidebar";
 import { describeEvent } from "@/lib/tool-event-display";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { useSessions, type LiveSessionState } from "@/lib/use-sessions";
+import { abortUnfinishedToolInvocations } from "@/lib/session-store";
 import { PanelLeft, SquareDashedMousePointer } from "lucide-react";
 
 /** The docked sections below `lg`, of which exactly one may be open. */
@@ -187,34 +189,20 @@ export default function Chat() {
     },
   });
 
-  const stop = () => {
+  const stop = useCallback((options?: { sync?: boolean }) => {
     stopGeneration();
 
-    const lastMessage = messages.at(-1);
-    const lastMessageLastPart = lastMessage?.parts.at(-1);
-    if (
-      lastMessage?.role === "assistant" &&
-      lastMessageLastPart?.type === "tool-invocation"
-    ) {
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        {
-          ...lastMessage,
-          parts: [
-            ...lastMessage.parts.slice(0, -1),
-            {
-              ...lastMessageLastPart,
-              toolInvocation: {
-                ...lastMessageLastPart.toolInvocation,
-                state: "result",
-                result: ABORTED,
-              },
-            },
-          ],
-        },
-      ]);
+    const abortInTranscript = () => {
+      setMessages((prev) => abortUnfinishedToolInvocations(prev));
+    };
+
+    if (options?.sync) {
+      flushSync(abortInTranscript);
+      return;
     }
-  };
+
+    abortInTranscript();
+  }, [setMessages, stopGeneration]);
 
   // Only "submitted" and "streaming" mean a turn is in flight. `!== "ready"`
   // also catches "error", which left the composer disabled with no way back.
@@ -462,22 +450,19 @@ export default function Chat() {
   }, [recordLifecycleEvent]);
 
   /**
-   * Switching mid-run aborts it first. `sanitiseMessagesForStorage` would repair
-   * a dangling `tool_use` on write anyway, but the request itself has to stop:
-   * its result would otherwise land in `useChat`'s entry for the session being
-   * left, after that session was written out.
+   * Switching mid-run aborts it first, then flushes that aborted transcript
+   * before activation changes. Without the synchronous step, React can batch the
+   * stop update with the session switch: the old session is persisted with a
+   * dangling call, while the abort patch races the new session id.
    */
   const handleSelectSession = useCallback(
     (nextSessionId: string) => {
       if (nextSessionId === activeSessionId) return;
-      if (isLoading) stop();
+      if (isLoading) stop({ sync: true });
       setIsSessionListOpen(false);
       selectSession(nextSessionId);
     },
-    // `stop` is rebuilt every render by design (it closes over `messages`), so
-    // it is read through the call rather than depended on.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeSessionId, isLoading, selectSession],
+    [activeSessionId, isLoading, selectSession, stop],
   );
 
   /**
@@ -497,21 +482,19 @@ export default function Chat() {
   );
 
   const handleCreateSession = useCallback(() => {
-    if (isLoading) stop();
+    if (isLoading) stop({ sync: true });
     setIsSessionListOpen(false);
     createSession();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [createSession, isLoading]);
+  }, [createSession, isLoading, stop]);
 
   const handleDeleteSession = useCallback(
     (sessionId: string) => {
-      if (sessionId === activeSessionId && isLoading) stop();
+      if (sessionId === activeSessionId && isLoading) stop({ sync: true });
       const orphanedSandboxId = deleteSession(sessionId);
       // Deleting a session the user is not in leaves a desktop nobody owns.
       if (orphanedSandboxId) killSandbox(orphanedSandboxId);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeSessionId, deleteSession, isLoading],
+    [activeSessionId, deleteSession, isLoading, stop],
   );
 
   return (
