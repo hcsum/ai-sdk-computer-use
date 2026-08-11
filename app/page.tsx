@@ -102,6 +102,7 @@ export default function Chat() {
   const [sandboxId, setSandboxId] = useState<string | null>(null);
   const [lifecycleEvents, setLifecycleEvents] = useState<LifecycleEvent[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [chatActivation, setChatActivation] = useState(0);
   // Two different things: the rail narrows to initials on desktop, and opens as
   // a drawer below `lg`, where there is no width to give it.
   const [isSessionRailCollapsed, setIsSessionRailCollapsed] = useState(false);
@@ -144,6 +145,9 @@ export default function Chat() {
     takePendingRestore,
     scheduleFlush,
   } = useSessions(liveRef);
+  const chatRuntimeId = activeSessionId
+    ? `${activeSessionId}:${chatActivation}`
+    : undefined;
 
   const {
     messages,
@@ -156,10 +160,11 @@ export default function Chat() {
     reload,
   } = useChat({
     api: "/api/chat",
-    // Chat identity is the session, never the sandbox: a sandbox lives at most
-    // 45 minutes, and keying the conversation on it would drop the transcript
-    // the moment a session had to reconnect to a new desktop.
-    id: activeSessionId ?? undefined,
+    // Persistence identity is still the session, never the sandbox. The extra
+    // activation suffix is only for the SDK runtime cache: an aborted stream can
+    // leave an old `[chatId, "status"]` stuck on "streaming", and switching
+    // back to the same durable session must start from a fresh runtime key.
+    id: chatRuntimeId,
     body: {
       sandboxId,
     },
@@ -460,6 +465,7 @@ export default function Chat() {
       if (nextSessionId === activeSessionId) return;
       if (isLoading) stop({ sync: true });
       setIsSessionListOpen(false);
+      setChatActivation((version) => version + 1);
       selectSession(nextSessionId);
     },
     [activeSessionId, isLoading, selectSession, stop],
@@ -484,12 +490,16 @@ export default function Chat() {
   const handleCreateSession = useCallback(() => {
     if (isLoading) stop({ sync: true });
     setIsSessionListOpen(false);
+    setChatActivation((version) => version + 1);
     createSession();
   }, [createSession, isLoading, stop]);
 
   const handleDeleteSession = useCallback(
     (sessionId: string) => {
       if (sessionId === activeSessionId && isLoading) stop({ sync: true });
+      if (sessionId === activeSessionId) {
+        setChatActivation((version) => version + 1);
+      }
       const orphanedSandboxId = deleteSession(sessionId);
       // Deleting a session the user is not in leaves a desktop nobody owns.
       if (orphanedSandboxId) killSandbox(orphanedSandboxId);
